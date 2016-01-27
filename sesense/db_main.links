@@ -1,0 +1,115 @@
+sig dbGetNetworkSecSensors : (Cred, Int) -> [SecSensor]
+fun dbGetNetworkSecSensors(cred, networkid) {
+  var rows = for (var row <-- sensorsTable)
+    where (row.networkid == networkid)
+    [sensorsRowToSecSensor(row)];
+  rows
+}
+
+sig dbGetSecSensor : (Cred, Int) -> Maybe(SecSensor)
+fun dbGetSecSensor(cred, sid) {
+  var rows = for (var row <-- sensorsTable)
+    where (row.sensorid == sid)
+    [sensorsRowToSecSensor(row)];
+  switch (rows) {
+    case [] -> Nothing
+    case h :: t -> Just(h)
+  }
+}
+
+sig dbGetNetwork : (Cred, Int) -> Maybe(NetworksRow)
+fun dbGetNetwork(cred, nid) {
+  var rows = for (var row <-- networksTable) where (row.networkid == nid) {
+    [row]
+  };
+  switch (rows) {
+    case [f] -> Just(f)
+    case _ -> Nothing
+  }
+}
+
+sig dataOptGetDomain : (DataOpt) -> String
+fun dataOptGetDomain(do) {
+  mP2ObjGetDomain(do.ponder)
+}
+
+sig filtersHasFilter: ([Filter], Filter) -> Bool
+fun filtersHasFilter(filters, filter) {
+ isJust(search(fun (x) { filter == x }, filters))
+}
+
+sig relDataToXml: (RelData(t)) -> Xml
+fun relDataToXml(sd) {
+  <div class="{
+    if (filtersHasFilter(sd.label.filters, "blank"))
+      "data_filtered_blank"
+    else 
+      if (length (sd.label.filters) > 0)
+        "data_filtered"
+      else
+        "data_unfiltered"
+  }">{sd.funcs.toXml(sd.value)}</div>
+}
+
+fun secDataApplyFilter(filter: Filter)(sd: SecData(t)) policy {
+  unpack sd as (value = lvalue, label = label, funcs = lfuncs);
+  var funcs = unlabel(lfuncs);
+
+  var value = unlabel(lvalue);
+  var nlabel = (ponder  = label.ponder,
+                field   = label.field,
+                filters = filter :: label.filters);
+
+  (value = relabel(funcs.applyFilter(filter)(value), nlabel),
+   label = nlabel,
+   funcs = relabel(funcs, nlabel)): SecData(t)
+}
+
+fun relDataApplyFilter(filter: Filter)(sd: RelData(t)) policy {
+  unpack sd as (value = value, label = label, funcs = funcs);
+  var nlabel = (ponder = label.ponder, field = label.field, filters = filter :: label.filters);
+  (value = funcs.applyFilter(filter)(value),
+   label = nlabel,
+   funcs = funcs): RelData(t)
+}
+
+sig sensorsRowToSecSensor : (SensorsRow) -> SecSensor
+fun sensorsRowToSecSensor(row) policy {
+  unpack row as (
+                 sensorid   = sensorid,
+                 networkid  = networkid,
+                 name       = dname,
+                 geo        = dgeo,
+                 function   = dfunction,
+                 ponder_ref = ponder_ref
+  );
+
+  var lsensor: DataOpt =
+    (filters = [],
+     ponder  = Just(ponder_ref),
+     field   = Nothing);
+
+  var lname: DataOpt = (filters = [],
+              ponder   = Just(ponder_ref),
+              field    = Just("name"));
+  var tname: SecData(String) = (value = relabel (unlabel(dname), lname), label = lname, funcs = relabel(dataFuncsString(), lname));
+
+  var lgeo: DataOpt = (filters = [],
+              ponder  = Just(ponder_ref),
+              field   = Just("geo"));
+  var tgeo: SecData(String) = (value = relabel (unlabel(dgeo), lgeo), label = lgeo, funcs = relabel(dataFuncsString(), lgeo));
+
+  var lfunction: DataOpt = (filters = [],
+              ponder  = Just(ponder_ref),
+              field   = Just("function"));
+  var tfunction: SecData(String) = (value = relabel (unlabel(dfunction), lfunction), label = lfunction, funcs = relabel(dataFuncsString(), lfunction));
+
+  var a = pack 
+    (sensorid  = sensorid,
+     networkid = networkid,
+     name      = relabel(tname, lsensor),
+     geo       = relabel(tgeo, lsensor),
+     function  = relabel(tfunction, lsensor),
+     label     = lsensor) as SecSensor;
+  a
+}

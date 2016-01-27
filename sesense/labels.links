@@ -1,0 +1,11 @@
+sig accessAllowed : (P2Obj, String, P2Obj) -> Bool
+fun accessAllowed(uobj, cmd, tobj) policy {
+  # no unlables here, but deals with policy
+  isGranted(p2actViewed(uobj, cmd, tobj))
+}
+
+sig accessAllowedField : (P2Obj, String, P2Obj, String) -> Bool
+fun accessAllowedField(uobj, cmd, tobj, field) policy {
+  # no unlables here, but deals with policy
+  isGranted(p2actViewedField(uobj, cmd, tobj, field))
+}

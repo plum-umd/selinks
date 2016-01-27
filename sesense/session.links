@@ -1,0 +1,9 @@
+sig sessionLogin : (String, String) -> Checked (Cred)
+fun sessionLogin(username, password) {
+  switch (dbCheckLogin(username, password)) {
+    case Just (r) -> 
+       if (p2login(r.ponder_ref)) OK (r) else throw(SecurityException("ponder prevented login"))
+    case Nothing -> 
+      throw(SecurityException("Wrong username/password"))
+  }
+}

@@ -1,0 +1,25 @@
+#!/fs/macdonald/piotrm/sesense/fable-6978/links --config=/fs/macdonald/piotrm/sesense/fable-6978/config
+
+include preludemax
+include checked
+include ponder
+
+include ui_formlet
+
+include labels
+include cred
+
+include db_def
+include db_session
+include db_main
+
+include sensor
+
+include session
+
+include ui_base
+include ui_main
+
+var do = defaultDrawOpt;
+drawPageLogin(do)
+

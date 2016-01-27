@@ -1,0 +1,105 @@
+var db = database "selinks";
+
+typename Filter = String;
+
+typename DataOpt = (
+                    filters: [Filter],
+                     ponder: Maybe(P2Obj),
+                      field: Maybe(String)
+                   );
+
+typename DataFuncs(t) = (toString: (t) -> String,
+                            toXml: (t) -> Xml,
+                      applyFilter: (Filter) -> (t) -> t
+);
+
+typename SecData(t) = (value: t {l}, label: l<-DataOpt is lab, funcs: DataFuncs(t) {l});
+typename RelData(t) = (value: t,     label: l<-DataOpt is lab, funcs: DataFuncs(t));
+
+sig dataFuncsInt: () -> DataFuncs(Int)
+fun dataFuncsInt() policy {
+  (toString = intToString,
+   toXml    = intToXml,
+   applyFilter = fun(filter)(value) {
+     switch (filter) {
+       case "blank" -> 0
+       case "noise" -> 42
+     }
+   })
+}
+
+sig dataFuncsString: () -> DataFuncs(String)
+fun dataFuncsString() policy {
+  (toString = id,
+   toXml    = stringToXml,
+   applyFilter = fun(filter)(value) {
+     switch (filter) {
+       case "blank" -> "blanked"
+       case "noise" -> "noised"
+     }
+   })
+}
+
+### users table related
+
+var usersTable = table "sesense_users" with (
+  userid : Int,
+  name : String,
+  password : String, 
+  ponder_ref : ul<-P2Obj is lab
+) where userid readonly from (db);
+
+### networks table related
+
+typename NetworksRow = (networkid: Int, name: String, geo: String);
+typename NetworksTable = [NetworksRow];
+
+var networksTable = table "sesense_networks" with (
+  networkid : Int,
+  name : String,
+  geo : String
+) where networkid readonly from (db);
+
+### sensor table related
+
+fun makeSensorsTable() policy { ### demo
+  table "sesense_sensors" with (
+    sensorid  : Int,
+    networkid : Int,
+    name      : String {l},
+    geo       : String {l},
+    function  : String {l},
+    ponder_ref : l<-P2Obj is lab
+  ) where sensorid readonly from (db)
+}
+
+typename SensorsRow = (sensorid:  Int,  ### demo
+                       networkid: Int,
+                       name: String {l},
+                       geo:  String {l},
+                       function:  String {l},
+                       ponder_ref: l<-P2Obj is lab
+);
+
+typename SensorsTable = [SensorsRow];
+
+typename SecSensor = ( ### demo
+                    sensorid:  Int,
+                    networkid: Int,
+                    name:     SecData(String) {l},
+                    geo:      SecData(String) {l},
+                    function: SecData(String) {l},
+                    label: l<-DataOpt
+                   );
+
+typename RelSensor = ( ### demo
+                    sensorid:  Int,
+                    networkid: Int,
+                    name:     RelData(String),
+                    geo:      RelData(String),
+                    function: RelData(String),
+                    label: l<-DataOpt
+                   );
+
+var sensorsTable = makeSensorsTable();
+

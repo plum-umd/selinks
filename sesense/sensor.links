@@ -1,0 +1,136 @@
+sig secSensorApplyFilter : (Filter) -> (SecSensor) -> SecSensor
+fun secSensorApplyFilter(filter)(ss) {
+  unpack ss as (sensorid  = sensorid,
+                networkid = networkid,
+                name      = lname,
+                geo       = lgeo,
+                function  = lfunction,
+                label     = label);
+
+  var nlabel: DataOpt = (ponder = label.ponder, field = label.field, filters = filter :: label.filters);
+
+  var trans = fun(sd) {
+    relabel(secDataApplyFilter(filter)(sd), nlabel)
+  };
+
+  var a = pack (sensorid  = sensorid,
+                networkid = networkid,
+                name      = trans(unlabel(lname)),
+                geo       = trans(unlabel(lgeo)),
+                function  = trans(unlabel(lfunction)),
+                label     = nlabel) as SecSensor;
+
+  a
+}
+
+sig relSensorApplyFilter : (Filter) -> (RelSensor) -> RelSensor
+fun relSensorApplyFilter(filter)(ss) {
+  unpack ss as (sensorid  = sensorid,
+                networkid = networkid,
+                name      = name,
+                geo       = geo,
+                function  = function,
+                label     = label);
+
+  var nlabel: DataOpt = (ponder = label.ponder, field = label.field, filters = filter :: label.filters);
+
+  var trans = fun(sd) {
+    relDataApplyFilter(filter)(sd)
+  };
+
+  var a = pack (sensorid  = sensorid,
+                networkid = networkid,
+                name      = trans(name),
+                geo       = trans(geo),
+                function  = trans(function),
+                label     = nlabel) as RelSensor;
+
+  a
+}
+
+sig secSensorCanRead: (Cred, SecSensor) -> PonderResult ### demo
+fun secSensorCanRead(cred, s) policy {
+  var conv = fun(cmd, args) {
+    switch(cmd) {
+      case "hasFilter" -> 
+        var [filter] = args;
+        boolToString(secSensorHasFilter(s, filter))
+      case _ -> error("evalSensorConv: do not know how to handle command: " ++ cmd)
+    }
+  };
+  var pobj = switch (s.label.ponder) {
+    case Just(x) -> x
+    case Nothing -> error("not good")
+  };
+  p2execAndConverse(p2drawActViewed(cred.ponder_ref, "read", pobj), conv)
+}
+
+sig secSensorHasFilter : (SecSensor, String) -> Bool
+fun secSensorHasFilter(s, filter) policy {
+  unpack s as (label = label);
+  filtersHasFilter(label.filters, filter)
+}
+
+sig secSensorRead: (Cred, SecSensor) -> Maybe(SecSensor)
+fun secSensorRead(cred, ss) {
+  var temp = secSensorCanRead(cred, ss);
+  switch (temp) {
+    case Granted(args) -> Just(ss)
+    case Denied(args)  -> secSensorReadTryFilters(cred, ss, p2viewQuery("filtersAsked"))
+    case Error(args)   -> Nothing
+    case _ -> error("bad PonderResult")
+  }
+}
+
+sig secSensorReadTryFilters: (Cred, SecSensor, [Filter]) -> Maybe(SecSensor)
+fun secSensorReadTryFilters(cred, s, filters) {
+  switch (filters) {
+    case [] -> Nothing
+    case f :: rf -> 
+      var sc = secSensorApplyFilter(f)(s);
+      switch (secSensorCanRead(cred, sc)) {
+        case Granted(args) -> Just(sc)
+        case Denied(args)  -> secSensorReadTryFilters(cred, s, rf)
+        case Error(args)   -> Nothing
+        case _ -> error("bad PonderResult")
+      }
+  }
+}
+
+sig secSensorToRelSensor: (Cred, SecSensor) -> RelSensor
+fun secSensorToRelSensor(cred, orig_sensor) policy {
+  var maybe_sat_sensor = secSensorRead(cred, orig_sensor);
+
+  var sensor: SecSensor = switch(maybe_sat_sensor) {
+    case Just(sat_sensor) -> sat_sensor
+    case Nothing -> orig_sensor
+  };
+
+  var trans: (SecData(t)) -> RelData(t) = fun(sd) {
+    unpack sd as (value = value, label = label, funcs = lfuncs);
+    (value = unlabel(value), label = label, funcs = unlabel(lfuncs))
+   };
+
+  unpack sensor as
+    (sensorid  = sensorid,
+     networkid = networkid,
+     name      = lname,
+     geo       = lgeo,
+     function  = lfunction,
+     label     = label);
+
+  var unlabeled_sensor = pack (
+    sensorid  = sensorid,
+    networkid = networkid,
+    name      = trans(unlabel(lname)),
+    geo       = trans(unlabel(lgeo)),
+    function  = trans(unlabel(lfunction)),
+    label     = sensor.label
+  ) as RelSensor;
+
+  switch (maybe_sat_sensor) {
+    case Just(_) -> unlabeled_sensor
+    case Nothing -> relSensorApplyFilter("blank")(unlabeled_sensor)
+  }
+}
+

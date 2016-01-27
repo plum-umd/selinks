@@ -1,0 +1,119 @@
+newdom := root/factory/domain.
+
+root at: "auth" put: newdom create.
+root/auth at: "sesense" put: newdom create.
+root/auth at: "user"    put: newdom create.
+
+newauthpol := root/factory/authpolicy.
+
+root/auth/sesense
+ at: "proxy_create" put:
+   (newauthpol
+      subject: root/proxy
+      action: "create:"
+      target: root/factory
+      focus: "st").
+root/auth/sesense/proxy_create
+  active: true.
+
+root/auth/sesense
+ at: "proxy_listNames_cauth" put:
+   (newauthpol
+      subject: root/proxy
+      action: "listNames"
+      target: root
+      focus: "st").
+root/auth/sesense/proxy_listNames_cauth
+  active: true.
+
+root/auth/sesense
+ at: "proxy_active_cauth" put:
+   (newauthpol
+      subject: root/proxy
+      action: "active:"
+      target: root
+      focus: "st").
+root/auth/sesense/proxy_active_cauth
+  active: true.
+
+root/auth/sesense
+ at: "proxy_isActive_cauth" put:
+   (newauthpol
+      subject: root/proxy
+      action: "isActive"
+      target: root
+      focus: "st").
+root/auth/sesense/proxy_isActive_cauth
+  active: true.
+
+root/auth/sesense
+ at: "proxy_getDetails_cauth" put:
+   (newauthpol
+      subject: root/proxy
+      action: "getDetails"
+      target: root
+      focus: "st").
+root/auth/sesense/proxy_getDetails_cauth
+  active: true.
+
+root/auth/sesense
+ at: "proxy_put" put:
+   (newauthpol
+     subject: root/proxy
+     action: "at:put:"
+     target: root
+     focus: "st").
+root/auth/sesense/proxy_put
+  active: true.
+
+root/auth/sesense
+ at: "proxy_action" put:
+   (newauthpol
+      subject: root/proxy
+      action: "action:target:"
+      target: root/user
+      focus: "st").
+root/auth/sesense/proxy_action
+  active: true.
+
+root/auth/sesense
+ at: "proxy_action_target_view" put:
+   (newauthpol
+      subject: root/proxy
+      action: "action:target:view:"
+      target: root/user
+      focus: "st").
+root/auth/sesense/proxy_action_target_view
+  active: true.
+
+// hmm, not sure if I cannot make the subject root/auth here
+root/auth/sesense
+ at: "auth_has_filter_view" put:
+   (newauthpol
+      subject: root
+      action: "hasFilter:"
+      target: root/view
+      focus: "st").
+root/auth/sesense/auth_has_filter_view
+  active: true.
+
+root/auth/sesense
+ at: "view_ask_proxy" put:
+   (newauthpol
+      subject: root/view
+      action: "ask:cid:"
+      target: root/proxy
+      focus: "st").
+root/auth/sesense/view_ask_proxy
+  active: true.
+
+root/auth/sesense
+ at: "proxy_filters_asked_view" put:
+   (newauthpol
+      subject: root/proxy
+      action: "filtersAsked"
+      target: root/view
+      focus: "st").
+root/auth/sesense/proxy_filters_asked_view
+  active: true.
+

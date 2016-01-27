@@ -1,0 +1,18 @@
+typename Cred = (ponder_ref: l<-P2Obj is lab, name : String{l}, userid : Int{l});
+
+sig credGetUserId : (Cred) -> Int
+fun credGetUserId(cred) policy {
+  unpack cred as (userid = userid);
+  unlabel(userid)
+}
+
+sig credGetName : (Cred) -> String
+fun credGetName(cred) policy {
+  unpack cred as (name = name);
+  unlabel(name)
+}
+
+sig credToP2Obj : (Cred) -> P2Obj
+fun credToP2Obj(cred) policy {
+  cred.ponder_ref
+}

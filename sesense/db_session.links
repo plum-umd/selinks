@@ -1,0 +1,18 @@
+# partially from the wiki
+sig dbCheckLogin : (String, String) -> Maybe (Cred)
+fun dbCheckLogin(username, password) policy {
+  var us = for (var entry <-- usersTable) 
+    where ((entry.name == username) && (entry.password == password))
+      [entry];
+  switch (us) {
+    case [r] -> 
+      var label = r.ponder_ref;
+      var ret = pack (ponder_ref=label,
+                      name=relabel(r.name, label),
+                      userid=relabel(r.userid, label)
+                     ) as
+          Cred;
+      Just (ret)
+    case _ -> Nothing
+  }
+}

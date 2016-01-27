@@ -1,0 +1,124 @@
+.desc {
+  text-align: left;
+  vertical-align: top;
+}
+
+body {
+ margin: 0px;
+ background: #d3c9bd;
+}
+
+form {
+ margin-bottom: 0px;
+}
+
+.policybox {
+}
+
+.policybox td {
+  background: #aaaaaa;
+}
+
+.user_select {
+ width: 350px;
+ background: #d4cabe;
+ padding: 10px;
+}
+
+img {
+  vertical-align: middle;
+}
+
+.data_unfiltered {
+ background: #aaffaa;
+ border: 1px solid green;
+ padding: 3px;
+}
+
+.data_filtered_blank {
+ background: black;
+ border: 1px solid black;
+ padding: 3px;
+}
+
+.data_filtered {
+ background: #ffff99;
+ border: 1px solid #aaaa55;
+ padding: 3px;
+}
+
+.deny_box {
+ background: #ff9999;
+ border: 1px solid red;
+}
+
+.content {
+ float: left;
+ clear: both;
+ width: 100%;
+ background: #e2e0e0;
+}
+
+.titlebar {
+ background-image:url('image/bg_desert_camo_bright.jpg');
+ border-bottom: 1px solid gray;
+ font-size: 20px;
+}
+
+.sessionbar {
+ float: left;
+ clear: both;
+ width: 100%;
+ border-bottom: 1px solid black;
+ background-image:url('image/bg_desert_camo_light.jpg')
+}
+
+.centered {
+  vertical-align: middle;
+  align: center;
+  color: red;
+}
+
+.datatable {
+ border: 1px solid black;
+ background: #eeeeee;
+}
+
+.datatable th {
+ border-bottom: 1px solid black;
+ background: #dddddd;
+}
+
+.datatable .label {
+ border-right: 1px solid #888888;
+ background: #e0e0e0;
+ text-align: right;
+ padding-right: 3px;
+}
+
+.datatable .ops {
+ background: #e0e0e0;
+ border-left: 1px solid #888888;
+ padding-left: 3px;
+}
+
+.monitor_networks {
+ padding: 5px;
+ background: #ccddcc;
+}
+
+.header {
+ font-size: 20px;
+ font-weight: normal;
+ border-bottom: 1px solid black;
+}
+
+.monitor_map {
+ padding: 5px;
+ background: #ccddcc;
+}
+
+.monitor_data {
+ padding: 5px;
+ background: #ccddcc;
+}

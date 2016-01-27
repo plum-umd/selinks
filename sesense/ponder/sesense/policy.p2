@@ -1,0 +1,81 @@
+//newauthpol := root/factory/authpolicy.
+
+newauthpol := root/factory/cpolicy.
+
+// login
+
+root/auth/user
+   at: "login"
+  put: (newauthpol
+          subject: root/user
+           action: "login"
+           target: root/sesense
+            focus: "st").
+root/auth/user/login
+  active: true.
+
+// sensor read
+
+root/auth/user
+   at: "usa_read_all"
+  put: (newauthpol
+          subject: root/user/usa
+           action: "read:"
+           target: root/sensor
+            focus: "st").
+root/auth/user/usa_read_all
+  active: true.
+
+root/auth/user
+   at: "uk_read_coalition"
+  put: (newauthpol
+          subject: root/user/coalition/uk
+           action: "read:"
+           target: root/sensor/coalition
+            focus: "st").
+root/auth/user/uk_read_coalition
+  active: true.
+
+root/auth/user
+   at: "uk_read_usa_filtered"
+  put: (newauthpol
+          subject: root/user/coalition/uk
+           action: "read:"
+           target: root/sensor/usa
+            focus: "st").
+root/auth/user/uk_read_usa_filtered
+  reqcondition: [ :view | (view hasFilter: "noise") ];
+  active: true.
+
+root/auth/user
+   at: "coalition_read_coalition_filtered"
+  put: (newauthpol
+          subject: root/user/coalition
+           action: "read:"
+           target: root/sensor/coalition
+            focus: "st").
+root/auth/user/coalition_read_coalition_filtered
+  reqcondition: [ :view | (view hasFilter: "noise") ];
+  active: true.
+
+root/auth/user
+   at: "iraq_read_iraq"
+  put: (newauthpol
+          subject: root/user/coalition/iraq
+           action: "read:"
+           target: root/sensor/coalition/iraq
+            focus: "st").
+root/auth/user/iraq_read_iraq
+  active: true.
+
+root/auth/user
+   at: "iraq_read_coalition_filtered"
+  put: (newauthpol
+          subject: root/user/coalition/iraq
+           action: "read:"
+           target: root/sensor/coalition
+            focus: "st").
+root/auth/user/iraq_read_coalition_filtered
+  reqcondition: [ :view | (view hasFilter: "noise") ];
+  active: true.
+

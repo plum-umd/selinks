@@ -1,0 +1,285 @@
+var emptyXmlString = stringToXml ("");
+
+sig fst : ((a::M, b)) -> a
+fun fst ((x, _)) { x }
+
+sig snd : ((a, b::M)) -> b
+fun snd ((_, y)) { y }
+
+sig eq : (b, b) -> Bool
+fun eq (x, y) { x == y }
+
+sig nth : ([a::M], Int) -> Maybe (a::M)
+fun nth (xs, n) server {
+  switch (xs) {
+    case ([]) -> Nothing
+    case (x::xs) -> 
+      switch (n) {
+        case 0 -> Just (x)
+        case _ -> nth (xs, n-1)
+      }
+  }
+}
+
+sig flop : ((a) -> (b) -> c) -> (b) -> (a) -> c
+fun flop(f) {
+  fun (x)(y) { f(y)(x) }
+}
+
+sig mapNumbered : ((Int, a::M) -> b::M, [a::M]) -> [b::M]
+fun mapNumbered (f, xs) {
+  fun mapNumbered_ (n, xs) {
+    switch (xs) {
+      case x::xs -> 
+        f (n, x) :: mapNumbered_ (n+1, xs)
+      case [] -> []
+    }
+  }
+  mapNumbered_ (0, xs)
+}
+
+sig searchEq : ((a, a) -> Bool, a, [a]) -> Maybe (a)
+fun searchEq (eq, x, ys) {
+  search (fun (y) { x == y }, ys)
+}
+
+sig partition : ((a) -> Bool, [a]) -> ([a], [a])
+fun partition (p, xs) {
+  (filter (p, xs), filter (compose (not, p), xs))
+}
+
+sig joinElements : (a, [a]) -> [a]
+fun joinElements (s, xs) {
+  switch (xs) {
+    case [] -> []
+    case x::[] -> [x]
+    case x::ys -> x :: s :: joinElements (s, ys)
+  }
+}
+
+sig split : ([a], a) -> [[a]]
+fun split (s, div) {
+  fun split_ (cur, ins) {
+    switch (ins) {
+      case c::ins -> 
+        if (c == div) cur :: split_ ([], ins)
+        else split_ (cur ++ [c], ins)
+      case [] -> [cur]
+    }
+  }
+  split_ ([], s)
+}
+
+fun removeWhiteSpace (s) {
+  fun isWhiteSpace (c) {
+    switch (c) {
+      case ' '    -> true
+      case '\011' -> true # \t
+      case '\012' -> true # \n
+      case '\013' -> true # \r
+      case _ -> false
+    }
+  }
+  filter (compose (not, isWhiteSpace), s)
+}
+
+# remove all duplicates from a list.
+# the list must be have all duplicate items grouped (e.g., sorted)
+sig nubByGrouped : ((a,a) -> Bool, [a]) -> [a]
+fun nubByGrouped (eq, xs) {
+  fun removeDupes_h (prev, xs) {
+    switch (xs) {
+      case x::xs -> 
+        if (eq (prev, x))
+          removeDupes_h (prev, xs) 
+        else
+          x :: removeDupes_h (x, xs)
+      case [] -> []
+    }
+  }
+  switch (xs) {
+    case x::xs -> x :: removeDupes_h (x, xs)
+    case [] -> []
+  }
+}
+
+sig catMaybes : ([Maybe (a::M)]) -> [a::M]
+fun catMaybes (ms) {
+  switch (ms) {
+    case Just (m)::ms -> m :: catMaybes (ms)
+    case Nothing::ms -> catMaybes (ms)
+    case [] -> []
+  }
+}
+
+sig fromMaybe : (a, Maybe (a)) -> a
+fun fromMaybe (x, my) {
+  switch (my) {
+    case Just (y) -> y
+    case Nothing  -> x
+  }
+}
+
+# span (p, xs) takes from xs while p is true, then returns the rest
+# the of list
+sig span : ((a) -> Bool, [a]) -> ([a],[a])
+fun span(p, xs) {
+  switch (xs) {
+    case ([]) -> ([],[])
+    case (x::xs) ->
+      if (p(x)) {
+        var (ps,xs) = span(p, xs);
+        (x::ps, xs)
+      } else ([],x::xs)
+  }
+}
+
+# tuplize translates a two-argument function into a function that
+# takes a single tuple (there is a distinction in Links). This is
+# especially useful in conjunction with map.
+sig tuplize : ((a,b) -> c) -> ((a,b)) -> c
+fun tuplize(f) {
+  fun ((x,y)) { f(x,y) }
+}
+
+# Map a two-argument function onto a list of tuples.
+sig mapPair : ((a,b) -> c, [(a,b)]) -> [c]
+fun mapPair(f, xys) {
+  map(tuplize(f), xys)
+}
+
+############################## ORDERING ##############################
+
+typename Ordering = [| GT | EQ | LT |];
+
+sig compare : (b, b) -> Ordering
+fun compare (x, y) {
+  if (x == y) EQ
+  else if (x < y) LT
+  else GT
+}
+
+###
+
+sig iter : (((a) -> ()), [a]) -> ()
+fun iter (f, xs) {
+  switch (xs) {
+    case x::xs -> f (x); iter (f, xs)
+    case [] -> ()
+  }
+}
+
+sig elem : ([a], a) -> Bool
+fun elem (xs,y) {
+  switch (xs) {
+    case [] -> false
+    case x::xs ->
+      if (x == y) true
+      else elem (xs,y)
+  }
+}
+
+# for each y in ys, concat to xs if not (elem y xs)
+# assumes xs has no duplicates
+sig union : ([a], [a]) -> [a]
+fun union (xs,ys) {
+  switch (ys) {
+    case [] -> xs
+    case y::ys ->
+      var xs = 
+      if (elem (xs,y)) xs
+      else y::xs;
+      union (xs,ys)
+  }
+}
+
+# monads for maybe types
+sig bindMaybe : (Maybe (a), (a) -> Maybe (b)) -> Maybe (b)
+fun bindMaybe (val, f) {
+  switch (val) {
+    case Just (v) -> f (v)
+    case Nothing -> Nothing
+  }
+}
+
+infixl 1 ?>>=;
+sig ?>>= : (Maybe (a), (a) -> Maybe(b)) -> Maybe (b)
+op (x) ?>>= f {
+  bindMaybe (x, f)
+}
+
+infixl 1 ?>>;
+sig ?>> : (Maybe (a), Maybe(b)) -> Maybe (b)
+op (x) ?>> y {
+  fun f (_) { y }
+  bindMaybe (x, f)
+}
+
+# if both values present, apply function f
+# if only one value, return that value
+# if neither, return Nothing
+sig maybeApply : ((a,a) -> a, Maybe (a), Maybe (a)) -> Maybe (a)
+fun maybeApply (f, x, y) {
+  switch ((x, y)) {
+    case (Just (x), Just (y)) -> Just (f (x, y))
+    case (Just (_), Nothing) -> x
+    case (Nothing, Just (_)) -> y
+    case (_, _) -> Nothing
+      
+  }
+}
+
+sig mapMaybe : ((a) -> Maybe (b), [a]) -> Maybe ([b])
+fun mapMaybe (f, xs) {
+  switch (xs) {
+    case (x::xs) -> switch (f (x)) {
+      case Just (y) -> switch (mapMaybe (f, xs)) {
+        case Just (ys) -> Just (y::ys)
+        case Nothing -> Nothing
+      }
+    case Nothing -> Nothing
+    }        
+  case [] -> Just ([])
+  }
+}
+
+# Expects a list of exactly one item.
+# If condition holds, return item; otherwise give error
+sig singleton : ([a]) -> a
+fun singleton (xs) {
+  switch (xs) {
+    case [x] -> x
+    case [] -> error ("Expected singleton, received empty list")
+    case _::_ -> 
+      var n = intToString (length (xs));
+      error ("Expected singleton, found list of " ++ n ++ " elements")
+  }
+}
+
+# Expects a list of exactly one item.
+# If condition holds, return item; otherwise give user-defined error
+sig ssingleton : (String,[a]) -> a
+fun ssingleton (err,xs) {
+  switch (xs) {
+    case [x] -> x
+    case [] -> error (err ++ ": Expected singleton, received empty list")
+    case _::_ -> 
+      var n = intToString (length (xs));
+      error (err ++ ": Expected singleton, found list of " ++ n ++ " elements")
+  }
+}
+
+sig max2 : (a, a) -> a
+fun max2 (x,y) { if (x > y) x else y }
+
+sig min2 : (a, a) -> a
+fun min2 (x,y) { if (x <= y) x else y }
+
+sig maximum : ([a]) -> a
+fun maximum (xs) { fold_left1 (max2, xs) }
+
+sig minimum : ([a]) -> a
+fun minimum (xs) { fold_left1 (min2, xs) }
+
+sig const : (a) -> (b) -> a
+fun const (x)(_) { x }

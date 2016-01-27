@@ -1,0 +1,351 @@
+# #### FORMS ABSTRACTION ####
+# #### Ultimately needs to be moved to a different namespaced module
+
+typename Env = [(String,String)];
+typename Names = Int;
+typename State (d::M,a::M) = [|State:(d::M) ->(a::M,d::M)|];
+typename Collector (a::M) = (Env) -> a::M;
+typename Formlet (a::M) = State (Names, (Xml,Collector(a::M)));
+typename Combiner (a::M,b::M,c::M) = (Collector (a::M)) -> (Collector (b::M)) -> Collector (c::M);
+
+infixr 0 $;
+sig $ : ((a::M) -> b::M, a::M) -> b::M
+op f $ x { f(x) }
+
+# state monad
+sig runState : (State (d::M,a::M)) -> (d::M) -> (a::M,d::M)
+fun runState(State (s)) { s }
+
+infixl 1 >>=;
+sig >>= : (State (d::M,a::M), (a::M) -> State(d::M,b::M)) -> State (d::M,b::M)
+op State (x) >>= f {
+   State (fun (s1) { var (v,s2) = x (s1); runState (f (v)) (s2) })
+}
+
+infixl 1 >>;
+sig >> : (State(a::M,b::M), State (a::M,c::M)) -> State (a::M,c::M)
+op m >> k {
+   m >>= fun (_) { k }
+}
+
+sig retern : (a::M) -> State (b::M,a::M)
+fun retern(a) {
+  State (fun (s) { (a,s)  })
+}
+
+sig get : State (d::M,d::M)
+var get = State (fun (s) { (s,s) });
+
+sig put :  (a::M) -> State(a::M,())
+fun put(s) {
+  State (fun (_) { ((), s) })
+}
+
+
+sig fmap : ((a::M) -> b::M) -> (State (c::M,a::M)) -> State (c::M,b::M)
+fun fmap(f)(x) {
+  x >>= (fun (x) { retern (f(x)) })
+} 
+
+sig lift2 : ((a::M,b::M) -> c::M) -> (State (d::M,a::M), State (d::M,b::M)) -> State(d::M,c::M)
+fun lift2(f)(x,y) {
+  x >>= (fun (x) { y >>= fun (y) { retern(f(x,y)) } })
+}
+
+
+sig pure : (a::M) -> Formlet(a::M)
+fun pure(v) {
+  retern(([], fun (_) { v }))
+}
+
+
+infixr 1 @@@;
+sig @@@ : (Formlet (a::M), Formlet (((a::M)-> b::M))) -> Formlet (b::M)
+op m @@@ k {
+  m >>= fun((x,c)){
+  k >>= fun((y,f)){
+  retern((x++y, fun(e){ f(e)(c(e)) }))}}
+}
+
+sig @@=> : (Formlet(a::M), (a::M) -> b::M) -> Formlet(b::M)
+op m @@=> f {
+  m @@@ pure(f)
+}
+
+sig xml : (Xml) -> Formlet (())
+fun xml(x) { retern ( (x, fun (e) { () })) }
+
+sig text : (String) -> Formlet (())
+fun text(s) { xml(stringToXml(s)) }
+
+sig plug : ((Xml) -> Xml, Formlet (a::M)) -> Formlet (a::M)
+op f `plug` m {
+  m >>= fun((x,v)){ retern((f(x),v)) }
+}
+
+sig makeName : (Int) -> String
+fun makeName(i) { "input_" ++ intToString(i) }
+
+sig nextName : State (Int,String)
+var nextName = 
+   get >>= fun (i) {
+   var name = makeName(i);
+   put (i+1) >>
+   retern (name)};
+
+
+
+# # Types of input we need to handle:
+# #   text
+# #   password
+# #   checkbox
+# #   radio
+# #   submit
+# #   reset
+# #   file
+# #   hidden
+# #   image
+# #   button
+
+# A one element formlet can be constructed using the input function.
+sig input : Formlet (String)
+var input = 
+   nextName >>= fun (name) {
+   (retern ((<input name="{name}"/>,
+             fun (env) { assoc(name, env)})))};
+
+sig emptyFormlet : (a::M) -> Formlet ([b::M])
+fun emptyFormlet(_) { pure([]) }
+
+# A one-element formlet with an initial value
+sig inputValue : (String) -> Formlet (String)
+fun inputValue(v) { 
+   nextName >>= fun (name) {
+   (retern ((<input name="{name}" value="{v}"/>,
+             fun (env) { assoc(name, env)})))}
+}
+
+# A hidden formlet
+sig hidden : (String) -> Formlet (String)
+fun hidden(v) { 
+   nextName >>= fun (name) {
+   (retern ((<input name="{name}" value="{v}" type="hidden" />,
+            fun (env) { assoc(name, env)})))}
+}
+
+fun hiddenInt(val) {
+  formlet <#>{ hidden(intToString(val)) -> rslt }</#>
+  yields { stringToInt(rslt) }
+}
+
+
+# A "file" type input.
+sig inputFile : Formlet (String)
+var inputFile = 
+   nextName >>= fun (name) {
+   (retern ((<input name="{name}" type="file" />,
+             fun (env) { assoc(name, env)})))};
+
+# TODO : fable chokes with Type error: Couldn't match Char against XmlItem
+# A formlet is rendered to a form, and a handler applied, using the render function
+sig render : (Formlet (a::M), (a::M) -> Xml) -> Xml
+fun render(frm, continuation) {
+   var ((xml, extractor),_) = runState(frm)(0);
+   <form enctype="application/x-www-form-urlencoded"
+         l:action="{continuation(extractor(environment()))}" method="POST">
+     {xml}
+   </form>
+}
+
+# Render formlet to a multipart form
+sig renderMultipart : (Formlet (a::M), (a::M) -> Xml) -> Xml
+fun renderMultipart(frm, continuation) {
+   var ((xml, extractor),_) = runState(frm)(0);
+   <form enctype="multipart/form-data" l:action="{continuation(extractor(environment()))}" method="POST">
+     {xml}
+   </form>
+}
+
+
+sig formlets : ([Formlet (a::M)]) -> Formlet ([a::M])
+fun formlets(fs) { 
+  switch (fs) {
+    case [] -> pure ([])
+    case (x::xs) -> x @@@ (formlets(xs) @@@ pure (fun(ls)(l) { l::ls}))
+  }
+}
+
+sig inputInt : Formlet(Int)
+var inputInt = input @@@ pure(stringToInt);
+
+sig inputIntValue : (Int) -> Formlet(Int)
+var inputIntValue = fun (value) { 
+  inputValue(intToString(value)) @@@ pure(stringToInt)
+};
+
+sig inputFloat : Formlet(Float)
+var inputFloat = input @@@ pure(stringToFloat);
+
+sig textarea : (String) -> Formlet (String)
+fun textarea(value) {
+   nextName >>= fun (name) {
+    retern ((<textarea name="{name}">{stringToXml(value)}</textarea>,
+            fun (env) { assoc(name, env) }))}
+}
+
+sig button : (String,[|Submit|Reset|Button|],a::M) -> Formlet (Maybe(a::M))
+fun button(text, behaviour, v) {
+  nextName >>= fun (name) {
+    var behaviour = switch (behaviour) {
+      case Submit -> "submit"
+      case Reset -> "reset"
+      case Button -> "button"
+    };
+    retern ((<button name="{name}" value="here" type="{behaviour}">{stringToXml(text)}</button>,
+             fun (env) { if (memassoc(name, env))  Just(v) else Nothing }))
+  }
+}
+
+sig submitButton : (String,a::M) -> Formlet (Maybe(a::M))
+fun submitButton(text, v) {
+  button(text, Submit, v)
+}
+
+sig resetButton : (String,a::M) -> Formlet (Maybe(a::M))
+fun resetButton(text, v) {
+  button(text, Reset, v)
+}
+
+sig pushButton : (String,a::M) -> Formlet (Maybe(a::M))
+fun pushButton(text, v) {
+  button(text, Button, v)
+}
+
+sig checkbox : Formlet (Bool)
+var checkbox =
+  nextName >>= fun (name) {
+  retern ((<input type="checkbox" name="{name}" value="yes" />,
+           fun (env) { (memassoc(name, env)) }))};
+
+
+# before ++ [selected] ++ after is a list of (value, data) pairs
+# layout is a function for rendering a list of (radio button, data) pairs
+#
+# [NOTE]
+#   A default selection is compulsory as recommended by the HTML spec.
+#   We should probably do the same for 'choice' (drop-down menus) as well.
+#
+# It is the users responsibility to ensure that layout produces Xml that
+# uses each radio button exactly once and does not introduce any other input
+# elements.
+#
+# The data components are useful for attaching extra data such as labels to
+# the radio buttons.
+sig inputRadiogroup : ([(String, a::M)], (String, a::M), [(String, a::M)], ([(Xml, a::M)]) -> Xml) -> Formlet (String) 
+fun inputRadiogroup(before, selected, after, layout) {
+  nextName >>= fun (name) {
+    var before = for (var (value, data) <- before)
+                  [(<input type="radio" name="{name}" value="{value}" />, data)];
+    var selected = [(<input type="radio" checked="on" name="{name}" value="{selected.1}" />, selected.2)];
+    var after = for (var (value, data) <- after)
+                  [(<input type="radio" name="{name}" value="{value}" />, data)];
+    
+    retern ((layout(before ++ selected ++ after), fun (env) { (assoc(name, env))}))
+  }
+}
+
+sig preludeOption : ((a::M,String), Bool) -> State(Names,(Xml, (((String) -> [a::M]) -> (String) -> [a::M])))
+fun preludeOption ((a,b), selected) {
+   nextName >>= fun (name) {
+	if(selected) {
+	   retern ((<option value="{name}" selected="SELECTED">{stringToXml(b)}</option>,
+            (fun (k) (key) { if (key == name) a::k(key) else k(key) })))
+	}
+	else {
+	   retern ((<option value="{name}">{stringToXml(b)}</option>,
+            (fun (k) (key) { if (key == name) a::k(key) else k(key) })))
+	}
+}}
+
+
+sig preludeOptions : ([(a::M,String)], a::M) -> State(Names,(Xml, (String) -> [a::M]))
+fun preludeOptions(items, default) {
+  switch (items) {
+     case [] -> retern ((<#/>, fun (_) { [] }))
+     case item::items -> preludeOption(item, (first(item) == default))
+                     >>= fun ((xml, r1)) { preludeOptions(items, default)
+                                         >>= fun ((morexml, r2)) { retern ((xml ++ morexml, r1(r2))) } }
+  }
+}
+
+#TODO: illegal combination of fable annotations
+sig preludeMultiOptions : ([(a::M,String,Bool)]) -> State(Names,(Xml, (String) -> [a::M]))
+fun preludeMultiOptions(items) {
+  switch (items) {
+     case [] -> retern ((<#/>, fun (_) { [] }))
+     case item::items -> preludeOption((first(item),second(item)), third(item))
+                     >>= fun ((xml, r1)) { preludeMultiOptions(items)
+                                         >>= fun ((morexml, r2)) { retern ((xml ++ morexml, r1(r2))) } }
+  }
+}
+
+sig choice : ([(a::M,String)]) -> Formlet (a)
+fun choice (items) {
+   var (default, _) = safe_hd("choice",items);
+  nextName >>= fun (name) {
+  preludeOptions(items, default) >>= fun ((xml, retrieve)) {
+  retern ((<select name="{name}">{xml}</select>,
+           fun (env) { safe_hd("choice",retrieve(assoc(name, env))) }))}}
+}
+
+sig choiceDefault : ([(a::M,String)], a::M) -> Formlet (a)
+fun choiceDefault (items, default) {
+  nextName >>= fun (name) {
+     preludeOptions(items, default) >>= fun ((xml, retrieve)) {
+        retern ((<select name="{name}">{xml}</select>,
+                 fun (env) { safe_hd("choiceDefault",retrieve(assoc(name, env))) }))
+     }
+  }
+}
+
+sig choices : ([(a::M,String, Bool)]) -> Formlet ([a::M])
+fun choices (items) {
+  nextName >>= fun (name) {
+     preludeMultiOptions(items) >>= fun ((xml, retrieve)) {
+        retern ((<select name="{name}" multiple="multiple">{xml}</select>,
+                 fun (env) { concat(map(retrieve, assocAll(name,env))) }))
+     }
+  }
+}
+
+sig choicesNone : ([(a::M, String)]) -> Formlet ([a::M])
+fun choicesNone (items) {
+  choices (map (fun ((v, name)) {(v, name, false)}, items))
+}
+
+### Formlet stuff ###
+sig inputPassword : Formlet (String)
+var inputPassword = 
+   nextName >>= fun (name) {
+   (retern ((<input name="{name}" type="password" />,
+            fun (env) { assoc(name, env)})))};
+
+sig loginFormlet : Formlet ((username:String, password:String))
+var loginFormlet =
+  formlet 
+  <#>
+    <table>
+      <tr>
+        <td>Username:</td>
+        <td>{input -> username}</td>
+      </tr>
+      <tr>
+        <td>Password:</td>
+        <td>{inputPassword -> passwd}</td>
+      </tr>
+      <tr><td>{ submitButton("Login", ()) -> login }</td></tr>
+    </table>
+  </#>
+  yields
+  (username=username, password=passwd);
+

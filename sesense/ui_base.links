@@ -1,0 +1,59 @@
+typename TestType (a::M) = (a::M) -> a::M;
+
+typename PageXml = Xml;
+
+typename DrawOpt = (editing: Bool);
+
+sig defaultDrawOpt : DrawOpt
+var defaultDrawOpt = (editing = false);
+
+sig drawSimpleButton: (String, () -> PageXml) -> Xml
+fun drawSimpleButton(label, action) {
+  render(submitButton(label, ()), fun (x) { action() })
+}
+
+sig xmlListToXml : ([Xml]) -> Xml
+fun xmlListToXml(xl) {
+  switch (xl) {
+    case [] -> <#></#>
+    case h::t -> <#>{h}{xmlListToXml(t)}</#>
+  }
+}
+
+sig drawCentered : (Xml) -> Xml
+fun drawCentered(content) {
+  <table width="100%" height="80%">
+    <tr><td align="center" valign="cener">
+      {content}
+    </td></tr>
+  </table>
+}
+
+sig drawTitleBar : (String, DrawOpt) -> Xml
+fun drawTitleBar(title, do) {
+  <div class="titlebar">
+    <div style="padding: 5px; clear: both">
+      <img src="icon/logo_se.png"/> { stringToXml(title) } { if (do.editing) <b>(editing)</b> else <#></#> }
+    </div>
+  </div>
+}
+
+sig drawPage : (DrawOpt, String, Xml) -> PageXml # from sewiki
+fun drawPage(do, title, content) {
+  var title_xml = stringToXml(title);
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <title>{stringToXml("se/sense: ")++title_xml}</title>
+    <link rel="stylesheet" type="text/css" href="sense.css" media="all"/>
+  </head>
+  <body>
+    { drawTitleBar(title, do) }
+    <div class="content">
+      <div style="padding: 5px">
+        { drawCentered(content) }
+      </div>
+    </div>
+  </body>
+</html>
+}
+

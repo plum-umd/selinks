@@ -1,0 +1,111 @@
+# Checked (Exception type)
+
+typename Exception =
+[| SecurityException : String
+ | RuntimeException : String
+ | PathException : String
+ | UnexpectedLabelException : String
+ |];
+
+typename Checked (a::M) = 
+[| OK : a 
+ | Exception : Exception
+|];
+
+sig throw : (Exception) -> Checked (a::M)
+fun throw(e) { Exception(e) }
+
+sig exceptionToString : (Exception) -> String
+fun exceptionToString(e) {
+  switch (e) {
+    case SecurityException(err) -> "SecurityException: "++err
+    case RuntimeException(err) -> "RuntimeException: "++err
+    case PathException(err) -> "PathException: "++err
+    case _ -> "Unknown exception"
+  }
+}
+
+fun exceptionToError(e) { error(exceptionToString(e)) }
+
+sig catch : (Checked (a::M)) -> a
+fun catch(val) { catchWithHandler(val)(exceptionToError) }
+
+sig catchWithHandler : (Checked (a::M)) -> ((Exception) -> a) -> a
+fun catchWithHandler(val)(handler) {
+  switch (val) {
+    case OK (v) -> v
+    case Exception (e) -> handler(e)
+  }
+}
+
+sig bindChecked : (Checked (a::M), (a) -> Checked (b::M)) -> Checked (b)
+fun bindChecked(val, f) {
+  switch (val) {
+    case OK (v) -> f(v)
+    case Exception (e) -> Exception(e)
+  }
+}
+
+infixl 1 +>>=;
+sig +>>= : (Checked (a::M), (a) -> Checked(b::M)) -> Checked (b)
+op (x) +>>= f {
+  bindChecked(x,f)
+}
+
+infixl 1 +>>;
+sig +>> : (Checked (a), Checked(b::M)) -> Checked (b)
+op (x) +>> y {
+  fun f (_) { y }
+  bindChecked(x,f)
+}
+
+sig returnChecked : (a) -> Checked(a)
+fun returnChecked(x) { OK(x) }
+
+fun returns(x) { returnChecked(x) }
+
+sig liftChecked : ((a) -> b) -> (a) -> Checked (b)
+fun liftChecked(f)(x) { returnChecked(f(x)) }
+
+sig sequenceChecked : ([Checked(a)]) -> Checked([a])
+fun sequenceChecked(cs) {
+  switch (cs) {
+    case OK(x)::cs -> 
+      switch (sequenceChecked(cs)) {
+        case OK(xs) -> OK(x::xs)
+        case Exception(e) -> Exception(e)
+      }
+    case Exception(e)::_ -> Exception(e)
+    case [] -> OK([])
+  }
+}
+
+sig mapChecked : ((a) -> Checked(b), [a]) -> Checked([b])
+fun mapChecked(f, xs) { sequenceChecked(map(f,xs)) }
+
+sig catchMaybe : (Checked (a)) -> Maybe (a)
+fun catchMaybe(x) { 
+  switch (x) {
+    case OK (x) -> Just (x)
+    case _ -> Nothing
+  }
+}
+
+# Ignore a Checked non-action
+sig suppress : (Checked (())) -> ()
+fun suppress(_) { () }
+
+# # Wrap a Checked thunk in a transaction
+# sig doTransaction : (Database) -> (() -> Checked (a)) -> Checked (a)
+# fun doTransaction(db)(checked) {
+#   startTransaction(db);
+#   var r = checked ();
+#   switch (r) {
+#     case OK(_) -> commitTransaction(db)
+#     case Exception(e) -> 
+#       debug("*** Transaction Failed ***");
+#       debug(exceptionToString(e));
+#       rollbackTransaction(db)
+#   };
+#   r
+# }

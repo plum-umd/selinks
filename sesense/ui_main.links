@@ -1,0 +1,286 @@
+sig drawDomainIcon : (String) -> Xml
+fun drawDomainIcon(d) {
+  <img width="24" height="16" src="icon/flag_{ d }.gif"/>
+}
+
+sig drawDomainIconLarge : (String) -> Xml
+fun drawDomainIconLarge(d) {
+  <img width="60" height="40" src="icon/flag_{ d }.gif"/>
+}
+
+sig drawPageNetwork : (Cred, DrawOpt, Int) -> PageXml
+fun drawPageNetwork(cred, do, networkid) {
+  var mnetwork = dbGetNetwork(cred, networkid);
+  var network = switch (mnetwork) {
+    case Just(n) -> n
+    case Nothing -> error("no such network")
+  };
+  drawPageSession(cred, do, "network: " ++ network.name,
+    <#>
+     {drawTableSecSensors(cred, do, dbGetNetworkSecSensors(cred, networkid))}
+    </#>)
+}
+
+sig dataOptToXml: (DataOpt) -> Xml
+fun dataOptToXml(do) {
+  var flagXml = drawDomainIconLarge(dataOptGetDomain(do));
+
+  <table>
+    <tr><td rowspan="2">{ flagXml }</td>
+    <td><b>object</b></td>
+    <td>
+   {switch (do.ponder) {
+     case Nothing -> stringToXml("none")
+     case Just(o) -> p2ObjToXml(o)
+   }}</td></tr>
+   <tr><td>
+     <b>filters</b></td><td> { stringToXml(join(",", do.filters)) }
+   </td></tr>
+   </table>
+}
+
+sig drawTableSecSensors : (Cred, DrawOpt, [SecSensor]) -> Xml
+fun drawTableSecSensors(cred, do, sensors) {
+  var xmlRows = for (var row <- sensors) {
+    var rrow = secSensorToRelSensor(cred, row);
+    <tr>
+      <td>{dataOptToXml(rrow.label)}</td>
+      <td>{intToXml(rrow.sensorid)}</td>
+      <td>{intToXml(rrow.networkid)}</td>
+      <td>{relDataToXml(rrow.name)}</td>
+      <td>{relDataToXml(rrow.geo)}</td>
+      <td>{relDataToXml(rrow.function)}</td>
+    </tr>
+  };
+
+  <table class="datatable">
+    <tr>
+      <th> - </th>
+      <th>sensorid</th>
+      <th>networkid</th>
+      <th>name</th>
+      <th>geo</th>
+      <th>function</th>
+    </tr>
+    {xmlRows}
+  </table>
+}
+
+sig drawTableNetworks : (Cred, DrawOpt, NetworksTable) -> Xml
+fun drawTableNetworks(cred, do, networks) {
+  var xmlRows = for (var row <- networks) {
+    <tr>
+      <td>{intToXml(row.networkid)}</td>
+      <td>{stringToXml(row.name)}</td>
+      <td>{drawSimpleButton("view", fun() { drawPageNetwork(cred, do, row.networkid) })}</td>
+    </tr>
+  };
+
+  <table class="datatable">
+    <tr><th>networkid</th><th>name</th><th> - </th></tr>
+    {xmlRows}
+  </table>
+}
+
+sig drawPageDiagrams : (Cred, DrawOpt) -> PageXml
+fun drawPageDiagrams(cred, do) {
+ drawPage(do, "diagrams",
+  <#>
+   <table>
+     <tr><td align="right"><img src="image/diag_basics.png"/></td><td class="desc">
+
+<b>Basics of SELinks Ponder2 integration in sesense</b><br/><br/>
+
+A logged in user, attempts to view sensor information using heir credentials (1). The sensor, stored in database (3) is retrieved by links (2) and an attempt is made to unlabel (4) the structure via a SELinks policy function (5). The policy, having the user credentials, in the form of a reference to a ponder managed object (9), and the reference to a sensor managed object (12), via the SELinks Proxy Managed Object (7), asks (8) the reference UserMO (9) to read the reference SensorMO (12). This action triggers a Ponder2 Authorization Policy (10). Having made its decision, the SELinks Policy is notified of that decision by either receiving the return message of the read operation or a "denied" flag. The labeled sensor structure is unlabeled and if denied is blanked out and returned to SELinks (13) and displayed to the user (14).
+
+</td></tr>
+
+<tr><td colspan="2"></td></tr>
+
+     <tr><td align="right"><img src="image/diag_timing.png"/></td><td class="desc">
+
+<b>Detailed Sensor Unlabeling SELinks / Ponder interaction in sesense</b><br/>
+<i>Note: function names are for demonstration purposes only.</i><br/>
+<br/>
+
+Having retrieved a labeled (protected) sensor via getSensor, the application attempts to unlabel it for viewing via an SELinks policy function unlabelSensor. As the first step, the policy function arranges the creation of a ViewMO managed object in Ponder2 to represent a user's "view" of the sensor that is presently under consideration. After a view is created, a UserMO referenced in the login credentials is asked to try to perform a read operation on the SensorMO referenced in the labeled sensor. This attempt triggers a Ponder2 Authorization policy, which as part of the operation being triggered, receives the ViewMO as the sensor's representative. To evaluate the application of the policy, the ViewMO is asked whether the view has the filter "noise" applied. The ViewMO in turn requests this information from the SELinks policy function, which evaluates such queries against the labeled sensor structure under consideration. Upon receiving the result of the hasFilter query, the policy denies the read operation. At this time the SELinks policy tries again by first retrieving the set of filters that have been asked of the ViewMO, and proceeding to trying them one by one. It applies the filter "noise" to the labeled sensor structure, and arranges for the UserMO to try a read operation once more. This time the sequence results in success and as such, the labeled sensor structure is unlabeled and returned to the application ready to be displayed or manipulated.
+
+</td></tr>
+
+     <tr><td align="center" colspan="2"><img src="image/diag_timing_src.png"/></td></tr>
+
+   </table>
+  </#>
+  )
+}
+
+sig drawPageMain : (Cred) -> PageXml
+fun drawPageMain(cred) {
+  var do = defaultDrawOpt;
+  drawPageSession(cred, do, "main",
+    <#>
+        <a l:href="{drawPageNetworks(cred, do)}">networks</a><br/>
+        <a l:href="{drawPageDiagrams(cred, do)}">diagrams</a><br/>
+        <a l:href="{drawPagePolicies(cred, do)}">policies</a><br/>
+    </#>
+  )
+}
+
+sig drawPageNetworks : (Cred, DrawOpt) -> PageXml
+fun drawPageNetworks(cred, do) {
+  drawPageSession(cred, do, "networks",
+    <#>
+      {drawTableNetworks(cred, do, asList(networksTable))}
+    </#>
+  )
+}
+
+sig actionPolicy: (Cred, DrawOpt, P2Obj, Bool) -> PageXml
+fun actionPolicy(cred, do, po, a) {
+  var res = p2interactPonder(p2ObjToString(po) ++ " active: " ++ boolToString(a) ++ ".");
+  drawPagePolicies(cred, do)
+}
+
+sig drawPolicy: (Cred, DrawOpt, String) -> Xml
+fun drawPolicy(cred, do, ps) {
+  var po = P2Obj("root/auth/user/" ++ ps);
+  var mp = p2getPolicy(po);
+
+  switch(mp) {
+    case Nothing -> <b> could not read policy details </b>
+    case Just(p) ->
+
+  <table class="datatable">
+    <tr>
+      <th align="center" valign="top" colspan="3"><b>{ stringToXml(ps) }</b></th>
+    </tr>
+    <tr>
+      <td class="label">subject</td><td> { p2ObjToXml(p.subject) }</td>
+      <td rowspan="4" width="120" align="center" valign="middle" class="ops">
+        { if (ps == "login") <b> operations not allowed </b> else
+          if (p.isActive)
+            drawSimpleButton("deactivate", fun() { actionPolicy(cred, do, po, false) })
+          else
+            drawSimpleButton("activate", fun() { actionPolicy(cred, do, po, true) })
+        }
+      </td>
+    </tr>
+    <tr><td class="label">action</td><td width="200">{ stringToXml(p.action) }</td></tr>
+    <tr><td class="label">target</td><td>{ p2ObjToXml(p.target) }</td></tr>
+    <tr><td class="label">active</td><td>{ stringToXml(boolToString(p.isActive)) }</td></tr>
+  </table>
+  }
+}
+
+sig drawPagePolicies: (Cred, DrawOpt) -> PageXml
+fun drawPagePolicies(cred, do) {
+  var pr = p2listNames(P2Obj("root/auth/user"));
+
+  var p = switch (pr) {
+    case Granted(args) ->
+     for (var arg <- args)
+       <#>{ drawPolicy(cred, do, arg) }<br/></#>
+    case Denied(args) -> <b>denied</b>
+    case _ -> error("drawPagePolicies: p2 proxy error")
+  };
+
+  drawPage(do, "policies", <#>{ p }</#>)
+}
+
+sig drawPageAdmin : (Cred, DrawOpt) -> PageXml
+fun drawPageAdmin(cred, do) {
+  <b>admin page</b>
+}
+
+### ui_session contents, mutual references no longer allowed among includes
+
+sig actionLogout : () -> PageXml
+fun actionLogout() {
+  var do = defaultDrawOpt;
+  drawPageLogin(do)
+}
+
+sig actionLogin : ((username:String, password:String)) -> PageXml
+fun actionLogin(userinfo) {
+  var do = defaultDrawOpt;
+  switch(sessionLogin(userinfo.username, userinfo.password)) {
+    case OK (cred) -> # drawPagePermSelect(cred, do)
+#      drawPageMain(cred)
+       drawPageNetworks(cred, do)
+    case Exception(SecurityException(m)) -> drawPageLoginFailed(do, Just(m))
+    case _ -> drawPageLoginFailed(do, Nothing)
+  }
+}
+
+sig drawUserLabel : (Cred, DrawOpt) -> Xml
+fun drawUserLabel(cred, do) {
+  var P2Obj(name) = cred.ponder_ref;
+  var domain = p2ObjGetDomain(cred.ponder_ref);
+  <#>
+    { drawDomainIcon(domain) }
+    { stringToXml(name) }
+  </#>
+}
+
+sig drawPageLoginFailed : (DrawOpt, Maybe(String)) -> PageXml
+fun drawPageLoginFailed(do, mmsg) {
+  drawPageLogin(do)
+}
+
+sig drawPageLogin : (DrawOpt) -> PageXml
+fun drawPageLogin(do) {
+  var rows = for (var user <-- usersTable) {
+    var domain = p2ObjGetDomain(user.ponder_ref);
+    var icon = drawDomainIconLarge(domain);
+    <a l:href="{ actionLogin((username = user.name, password = user.password))}">
+    <table class="user_select">
+     <tr>
+      <td rowspan="2" width="1">{ icon }</td>
+      <td><b>{ stringToXml(user.name) }</b></td>
+     </tr>
+     <tr>
+      <td>{ p2ObjToXml(user.ponder_ref) }</td>
+     </tr>
+    </table>
+    </a>
+  };
+  drawPage(do, "Login", <table><tr><td>{ rows }</td></tr></table>) 
+}
+
+sig drawSessionBar : (Cred, DrawOpt) -> Xml
+fun drawSessionBar(cred, do) {
+  <div class="sessionbar">
+    <div style="padding: 5px; clear: both">
+      <div style="float: left">
+        <b>{stringToXml(credGetName(cred))}</b>
+        (<i>{drawUserLabel(cred, do)}</i>)
+      </div>
+      <div style="float: right">
+        <a target="_blank" l:href="{drawPagePolicies(cred, do)}">policies</a> |
+        <a target="_blank" l:href="{drawPageDiagrams(cred, do)}">diagrams</a> | 
+        <a l:href="{actionLogout()}">logout</a>
+      </div>
+    </div>
+  </div>
+}
+
+# from sewiki
+sig drawPageSession : (Cred, DrawOpt, String, Xml) -> PageXml
+fun drawPageSession(cred, do, title, content) {
+  var title_xml = stringToXml(title);
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <title>{stringToXml("se/sense: ")++title_xml}</title>
+    <link rel="stylesheet" type="text/css" href="sense.css" media="all"/>
+  </head>
+  <body>
+    { drawSessionBar(cred, do) }
+    { drawTitleBar(title, do) }
+    <div class="content">
+      <div style="padding: 5px">
+        { drawCentered(content) }
+      </div>
+    </div>
+  </body>
+</html>
+}

@@ -1,0 +1,84 @@
+// adapted from various ponder2tutorial .p2 files
+
+pf := (root load: "CPolicy").
+uf := (root load: "UserMO").
+vf := (root load: "ViewMO").
+
+root/factory
+  at: "cpolicy" put: pf;
+  at: "user" put: uf;
+  at: "view" put: vf.
+
+newdom := root/factory/domain.
+
+root/factory
+  at: "selinksproxy" put: (root load: "SelinksProxy");
+  at: "sesense" put: (root load: "Sesense").
+
+root
+  at: "proxy" put: (root/factory/selinksproxy create: 6666);
+  at: "sesense" put: (root/factory/sesense create);
+  at: "user" put: newdom create;
+  at: "view" put: newdom create.
+
+// users
+
+root/user
+  at: "usa" put: newdom create;
+  at: "coalition" put: newdom create.
+
+root/user/coalition
+  at: "uk" put: newdom create;
+  at: "iraq" put: newdom create.
+
+root/user/usa
+  at: "jfoster"
+  put: (uf createname: "jfoster" userid: 100 path: "/user/usa/jfoster").
+
+root/user/coalition
+  at: "piotrm"
+  put: (uf createname: "piotm" userid: 100 path: "/user/coalition/piotrm").
+
+root/user/coalition/uk
+  at: "mwh"
+  put: (uf createname: "mwh" userid: 100 path: "/user/uk/mwh").
+
+root/user/coalition/iraq
+  at: "jalal"
+  put: (uf createname: "jalal" userid: 100 path: "/user/iraq/jalal").
+
+// sensors
+
+root at: "sensor" put: newdom create.
+root/sensor
+  at: "usa" put: newdom create;
+  at: "coalition" put: newdom create.
+
+root/sensor/coalition
+  at: "iraq" put: newdom create;
+  at: "uk"   put: newdom create.
+
+sf := (root load: "SensorAdaptor").
+root/factory at: "sensor" put: sf.
+
+s1 := (sf create: "net1" name: "video1" sim: false).
+s2 := (sf create: "net1" name: "video2" sim: false).
+s3 := (sf create: "net1" name: "scent1" sim: false).
+s4 := (sf create: "net1" name: "audio1" sim: false).
+s5 := (sf create: "net1" name: "audio2" sim: false).
+
+root/sensor/usa
+  at: "video1" put: s1;
+  at: "video2" put: s2.
+root/sensor/coalition
+  at: "scent1" put: s3.
+root/sensor/coalition/uk
+  at: "audio1" put: s4.
+root/sensor/coalition/iraq
+  at: "audio2" put: s5.
+
+// s1 stop.
+// s2 stop.
+// s3 stop.
+// s4 stop.
+// s5 stop.

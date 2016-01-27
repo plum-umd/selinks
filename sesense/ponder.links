@@ -1,0 +1,284 @@
+# Globals
+var proxyHost = "localhost";
+var proxyPort = 6666;
+
+typename P2Obj = [| P2Obj:(String) |];
+
+var p2Site = P2Obj("root/sesense");
+
+var p2Proxy = proxy_open(proxyHost, proxyPort);
+
+var p2Id = intToString(getppid());
+
+var p2ViewName = "view" ++ p2Id;
+var p2View = P2Obj("root/view/" ++ p2ViewName);
+
+var p2Delim = " :: ";
+var p2PartDelim = " ;; ";
+
+typename ConvObj(x) = [ (String, x) ];
+
+typename PonderTalk    = String;
+typename PonderAction  = String;
+typename ContentString = String;
+
+typename Conv = (String, [String]) -> String;
+
+typename PonderResult = [| Granted : [String]
+                         | Denied  : [String]
+                         | Error   : [String]
+                         | Good    : [String] |];
+
+sig p2ObjGetDomain: (P2Obj) -> String
+fun p2ObjGetDomain(o) {
+  var P2Obj(s) = o;
+  if (s ~ /.*\/usa\/.*/) "usa" else
+  if (s ~ /.*\/uk\/.*/) "uk" else
+  if (s ~ /.*\/iraq\/.*/) "iraq" else
+  if (s ~ /.*\/coalition\/.*/) "coalition" else
+    "unknown"
+}
+
+sig mP2ObjGetDomain: (Maybe(P2Obj)) -> String
+fun mP2ObjGetDomain(mo) {
+  switch (mo) {
+    case Nothing -> "none"
+    case Just(o) -> p2ObjGetDomain(o)
+  }
+}
+
+sig boolToString: (Bool) -> String
+fun boolToString(b) {
+  if (b) "true" else "false"
+}
+
+sig stringToBool: (String) -> Bool
+fun stringToBool(b) {
+  switch (b) {
+    case "true" -> true
+    case "false" -> false
+    case _ -> error("could not convert to bool: " ++ b)
+  }
+}
+
+sig isGranted: (PonderResult) -> Bool 
+fun isGranted(r) {
+  switch (r) {
+    case (Granted(s)) -> true
+    case _ -> false
+  }
+}
+
+sig resultParse: (String) -> PonderResult
+fun resultParse(s) {
+  var parts = string_split(s, p2PartDelim);
+  switch (parts) {
+    case ("granted" :: r) -> Granted(r)
+    case ("denied" :: r)  -> Denied(r)
+    case ("error" :: r)   -> Error(r)
+    case ("good" :: r)    -> Good(r)
+    case (v :: _) -> error ("resultParse: unknown ponder result variant: " ++ v ++ " in string: " ++ s)
+  }
+}
+
+sig p2send : (String) -> ()
+fun p2send(s) {
+  proxy_sendline(p2Proxy, s)
+}
+
+sig p2readline: () -> String
+fun p2readline() {
+  var ret = proxy_readline(p2Proxy);
+  ret
+}
+
+sig p2drawViewQuery: (String) -> PonderTalk
+fun p2drawViewQuery(cmd) {
+  p2ObjToString(p2View) ++ " " ++ cmd ++ "."
+}
+
+sig p2viewQuery: (String) -> [String]
+fun p2viewQuery(cmd) {
+  var res = p2interactPonder(p2drawViewQuery(cmd));
+  switch (res) {
+    case Granted(r) -> r
+    case _ -> error("p2viewQuery: wasn't able to query the recent view... not good")
+  } 
+}
+
+sig p2sendPonder: (PonderTalk) -> ()
+fun p2sendPonder(s) {
+  p2send(p2drawLine("ponder", s))
+}
+
+sig p2interactPonder: (PonderTalk) -> PonderResult
+fun p2interactPonder(s) {
+  p2sendPonder(s);
+  var read = p2readline();
+  switch (lineParse(read)) {
+    case (p2Id, "response", vals) -> resultParse(vals)
+    case _ -> error("p2interactPonder: cannot respond, this is not a conversation")
+  }
+}
+
+sig p2sendResult: (ContentString) -> ()
+fun p2sendResult(s) {
+  p2send(p2drawLine("result", s))
+}
+
+sig p2drawLine: (String, ContentString) -> String
+fun p2drawLine(type, cmd) {
+  p2Id ++ p2Delim ++ type ++ p2Delim ++ cmd
+}
+
+sig p2execAndConverse: (PonderTalk, Conv) -> PonderResult
+fun p2execAndConverse(cmd, conv) {
+  p2sendPonder("root/view at: \"" ++ p2ViewName ++ "\" put: (root/factory/view create: \"" ++ p2Id ++ "\").");
+  ignore (p2readline());
+  p2sendPonder(cmd);
+  p2converseAbout(conv)
+}
+
+sig lineParse : (String) -> (String, String, String)
+fun lineParse(line) {
+  var parts = string_split (line, p2Delim);
+  if (not (length (parts) == 3)) error ("lineParse: line did not have 3 parts: " ++ line) else ();
+  var [f,s,t] = parts;
+  (f,s,t)
+}
+
+sig queryParse : (String) -> (String, String, [String])
+fun queryParse(line) {
+  var parts = string_split (line, p2PartDelim);
+  if (not (length (parts) > 1)) error ("queryParse: line did not have at least 2 parts: " ++ line) else ();
+  var f :: s :: rest = parts;
+  (f,s,rest)
+}
+
+sig p2converseAbout : (Conv) -> PonderResult
+fun p2converseAbout(conv) {
+  var s = p2readline();
+  switch(lineParse(s)) {
+    case (p2Id, "response", vals) ->
+      resultParse(vals)
+    case (p2Id, "query", vals) ->
+      var (refnum, querycmd, args) = queryParse(vals);
+      p2sendResult(refnum ++ " ;; " ++ conv(querycmd, args));
+      p2converseAbout(conv)
+    case _ -> error ("cannot handle line")
+  }
+}
+
+sig p2ObjToString : (P2Obj) -> String
+fun p2ObjToString(o) {
+  var (P2Obj(s)) = o;
+  s
+}
+
+sig p2ObjToXml : (P2Obj) -> Xml
+fun p2ObjToXml(o) {
+  stringToXml("P2Obj(" ++ p2ObjToString(o) ++ ")")
+}
+
+sig p2drawAct : (P2Obj, PonderAction, P2Obj) -> PonderTalk
+fun p2drawAct(subject, action, target) {
+  p2ObjToString(subject) ++ " action: \"" ++ action ++ "\" target: " ++ p2ObjToString(target) ++ "."
+}
+
+sig p2act : (P2Obj, PonderAction, P2Obj) -> PonderResult
+fun p2act(subject, action, target) {
+  p2interactPonder(p2drawAct(subject, action, target))
+}
+
+sig p2drawActViewed : (P2Obj, PonderAction, P2Obj) -> PonderTalk
+fun p2drawActViewed(subject, action, target) {
+  var action = action ++ ":";
+  p2ObjToString(subject) ++ " action: \"" ++ action ++ "\" target: " ++ p2ObjToString(target) ++ " view: " ++ p2ObjToString(p2View) ++ "."
+}
+
+sig p2drawActViewedField : (P2Obj, PonderAction, P2Obj, String) -> PonderTalk
+fun p2drawActViewedField(subject, action, target, field) {
+  var action = action ++ ":field:";
+  p2ObjToString(subject) ++ " action: \"" ++ action ++ "\" target: " ++ p2ObjToString(target) ++ " view: " ++ p2ObjToString(p2View) ++ " field: \"" ++ field ++ "\"."
+}
+
+sig p2actViewed : (P2Obj, PonderAction, P2Obj) -> PonderResult
+fun p2actViewed(subject, action, target) {
+  p2interactPonder(p2drawActViewed(subject, action, target))
+}
+
+sig p2actViewedField : (P2Obj, PonderAction, P2Obj, String) -> PonderResult
+fun p2actViewedField(subject, action, target, field) {
+  p2interactPonder(p2drawActViewedField(subject, action, target, field))
+}
+
+sig p2drawCmd : (P2Obj, PonderAction, P2Obj) -> PonderTalk
+fun p2drawCmd(subject, action, target) {
+  p2ObjToString(subject) ++ " " ++ action ++ ": " ++ p2ObjToString(target) ++ "."
+}
+
+sig p2drawViewedCmd: (P2Obj, PonderAction, P2Obj) -> PonderTalk
+fun p2drawViewedCmd(subject, action, target) {
+  p2ObjToString(subject) ++ " " ++ action ++ ": " ++ p2ObjToString(target) ++ " view: " ++ p2ObjToString(p2View) ++ "."
+}
+
+sig p2execCmd : (P2Obj, PonderAction, P2Obj) -> PonderResult
+fun p2execCmd(subject, action, target) {
+  p2exec(p2drawCmd(subject, action, target))
+}
+
+sig p2exec : (PonderTalk) -> PonderResult
+fun p2exec(s) {
+  var (_,_, r) = lineParse(proxy_interact(p2Proxy, p2drawLine("ponder", s)));
+  resultParse(r)
+}
+
+sig p2StringToBool : (String) -> Bool
+fun p2StringToBool(s) {
+  switch (s) {
+    case "true" -> true
+    case _ -> false
+  }
+}
+
+sig p2login : (P2Obj) -> Bool
+fun p2login(username) {
+  isGranted(p2act(username, "login", p2Site))
+}
+
+sig p2listNames: (P2Obj) -> PonderResult
+fun p2listNames(o) {
+  p2interactPonder(p2ObjToString(o) ++ " listNames.")
+}
+
+typename P2Policy = (subject: P2Obj,
+                     target: P2Obj,
+                     action: String,
+                     isActive: Bool,
+                     reqcond: String);
+
+sig p2getOnlyArg: (PonderTalk) -> String
+fun p2getOnlyArg(pt) {
+  var mr = p2interactPonder(pt);
+  switch (mr) {
+    case Granted(f :: []) -> f
+    case Denied(_) -> " - read denied - "
+    case Granted(f :: s :: r) -> " - more than a single argument was present - "
+    case _ -> " - could not read - "
+  }
+}
+
+sig p2getPolicy: (P2Obj) -> Maybe(P2Policy)
+fun p2getPolicy(o) {
+  var mparts = p2interactPonder(p2ObjToString(o) ++ " getDetails.");
+
+  switch (mparts) {
+    case Granted([active, subject, target, action, reqcond]) ->
+      Just (subject = P2Obj(subject),
+            target  = P2Obj(target),
+            action  = action,
+            isActive = stringToBool(active),
+            reqcond = reqcond)
+    case _ -> Nothing
+  }
+}

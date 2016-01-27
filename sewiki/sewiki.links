@@ -1,0 +1,4099 @@
+#!/fs/macdonald/piotrm/sesense/fable-6978/links --config=/fs/macdonald/piotrm/sesense/fable-6978/config
+
+# #### FORMS ABSTRACTION ####
+# #### Ultimately needs to be moved to a different namespaced module
+
+typename Env = [(String,String)];
+typename Names = Int;
+typename State (d::M,a::M) = [|State:(d::M) ->(a::M,d::M)|];
+typename Collector (a::M) = (Env) -> a::M;
+typename Formlet (a::M) = State (Names, (Xml,Collector(a::M)));
+typename Combiner (a::M,b::M,c::M) = (Collector (a::M)) -> (Collector (b::M)) -> Collector (c::M);
+
+infixr 0 $;
+sig $ : ((a::M) -> b::M, a::M) -> b::M
+op f $ x { f(x) }
+
+# state monad
+sig runState : (State (d::M,a::M)) -> (d::M) -> (a::M,d::M)
+fun runState(State (s)) { s }
+
+infixl 1 >>=;
+sig >>= : (State (d::M,a::M), (a::M) -> State(d::M,b::M)) -> State (d::M,b::M)
+op State (x) >>= f {
+   State (fun (s1) { var (v,s2) = x (s1); runState (f (v)) (s2) })
+}
+
+infixl 1 >>;
+sig >> : (State(a::M,b::M), State (a::M,c::M)) -> State (a::M,c::M)
+op m >> k {
+   m >>= fun (_) { k }
+}
+
+sig retern : (a::M) -> State (b::M,a::M)
+fun retern(a) {
+  State (fun (s) { (a,s)  })
+}
+
+sig get : State (d::M,d::M)
+var get = State (fun (s) { (s,s) });
+
+sig put :  (a::M) -> State(a::M,())
+fun put(s) {
+  State (fun (_) { ((), s) })
+}
+
+
+sig fmap : ((a::M) -> b::M) -> (State (c::M,a::M)) -> State (c::M,b::M)
+fun fmap(f)(x) {
+  x >>= (fun (x) { retern (f(x)) })
+} 
+
+sig lift2 : ((a::M,b::M) -> c::M) -> (State (d::M,a::M), State (d::M,b::M)) -> State(d::M,c::M)
+fun lift2(f)(x,y) {
+  x >>= (fun (x) { y >>= fun (y) { retern(f(x,y)) } })
+}
+
+
+sig pure : (a::M) -> Formlet(a::M)
+fun pure(v) {
+  retern(([], fun (_) { v }))
+}
+
+
+infixr 1 @@@;
+sig @@@ : (Formlet (a::M), Formlet (((a::M)-> b::M))) -> Formlet (b::M)
+op m @@@ k {
+  m >>= fun((x,c)){
+  k >>= fun((y,f)){
+  retern((x++y, fun(e){ f(e)(c(e)) }))}}
+}
+
+sig @@=> : (Formlet(a::M), (a::M) -> b::M) -> Formlet(b::M)
+op m @@=> f {
+  m @@@ pure(f)
+}
+
+sig xml : (Xml) -> Formlet (())
+fun xml(x) { retern ( (x, fun (e) { () })) }
+
+sig text : (String) -> Formlet (())
+fun text(s) { xml(stringToXml(s)) }
+
+sig plug : ((Xml) -> Xml, Formlet (a::M)) -> Formlet (a::M)
+op f `plug` m {
+  m >>= fun((x,v)){ retern((f(x),v)) }
+}
+
+sig makeName : (Int) -> String
+fun makeName(i) { "input_" ++ intToString(i) }
+
+sig nextName : State (Int,String)
+var nextName = 
+   get >>= fun (i) {
+   var name = makeName(i);
+   put (i+1) >>
+   retern (name)};
+
+
+
+# # Types of input we need to handle:
+# #   text
+# #   password
+# #   checkbox
+# #   radio
+# #   submit
+# #   reset
+# #   file
+# #   hidden
+# #   image
+# #   button
+
+# A one element formlet can be constructed using the input function.
+sig input : Formlet (String)
+var input = 
+   nextName >>= fun (name) {
+   (retern ((<input name="{name}"/>,
+             fun (env) { assoc(name, env)})))};
+
+sig emptyFormlet : (a::M) -> Formlet ([b::M])
+fun emptyFormlet(_) { pure([]) }
+
+# A one-element formlet with an initial value
+sig inputValue : (String) -> Formlet (String)
+fun inputValue(v) { 
+   nextName >>= fun (name) {
+   (retern ((<input name="{name}" value="{v}"/>,
+             fun (env) { assoc(name, env)})))}
+}
+
+# A hidden formlet
+sig hidden : (String) -> Formlet (String)
+fun hidden(v) { 
+   nextName >>= fun (name) {
+   (retern ((<input name="{name}" value="{v}" type="hidden" />,
+            fun (env) { assoc(name, env)})))}
+}
+
+fun hiddenInt(val) {
+  formlet <#>{ hidden(intToString(val)) -> rslt }</#>
+  yields { stringToInt(rslt) }
+}
+
+
+# A "file" type input.
+sig inputFile : Formlet (String)
+var inputFile = 
+   nextName >>= fun (name) {
+   (retern ((<input name="{name}" type="file" />,
+             fun (env) { assoc(name, env)})))};
+
+# TODO : fable chokes with Type error: Couldn't match Char against XmlItem
+# A formlet is rendered to a form, and a handler applied, using the render function
+sig render : (Formlet (a::M), (a::M) -> Xml) -> Xml
+fun render(frm, continuation) {
+   var ((xml, extractor),_) = runState(frm)(0);
+   <form enctype="application/x-www-form-urlencoded"
+         l:action="{continuation(extractor(environment()))}" method="POST">
+     {xml}
+   </form>
+}
+
+# Render formlet to a multipart form
+sig renderMultipart : (Formlet (a::M), (a::M) -> Xml) -> Xml
+fun renderMultipart(frm, continuation) {
+   var ((xml, extractor),_) = runState(frm)(0);
+   <form enctype="multipart/form-data" l:action="{continuation(extractor(environment()))}" method="POST">
+     {xml}
+   </form>
+}
+
+
+sig formlets : ([Formlet (a::M)]) -> Formlet ([a::M])
+fun formlets(fs) { 
+  switch (fs) {
+    case [] -> pure ([])
+    case (x::xs) -> x @@@ (formlets(xs) @@@ pure (fun(ls)(l) { l::ls}))
+  }
+}
+
+sig inputInt : Formlet(Int)
+var inputInt = input @@@ pure(stringToInt);
+
+sig inputIntValue : (Int) -> Formlet(Int)
+var inputIntValue = fun (value) { 
+  inputValue(intToString(value)) @@@ pure(stringToInt)
+};
+
+sig inputFloat : Formlet(Float)
+var inputFloat = input @@@ pure(stringToFloat);
+
+sig textarea : (String) -> Formlet (String)
+fun textarea(value) {
+   nextName >>= fun (name) {
+    retern ((<textarea name="{name}">{stringToXml(value)}</textarea>,
+            fun (env) { assoc(name, env) }))}
+}
+
+sig button : (String,[|Submit|Reset|Button|],a::M) -> Formlet (Maybe(a::M))
+fun button(text, behaviour, v) {
+  nextName >>= fun (name) {
+    var behaviour = switch (behaviour) {
+      case Submit -> "submit"
+      case Reset -> "reset"
+      case Button -> "button"
+    };
+    retern ((<button name="{name}" value="here" type="{behaviour}">{stringToXml(text)}</button>,
+             fun (env) { if (memassoc(name, env))  Just(v) else Nothing }))
+  }
+}
+
+sig submitButton : (String,a::M) -> Formlet (Maybe(a::M))
+fun submitButton(text, v) {
+  button(text, Submit, v)
+}
+
+sig resetButton : (String,a::M) -> Formlet (Maybe(a::M))
+fun resetButton(text, v) {
+  button(text, Reset, v)
+}
+
+sig pushButton : (String,a::M) -> Formlet (Maybe(a::M))
+fun pushButton(text, v) {
+  button(text, Button, v)
+}
+
+sig checkbox : Formlet (Bool)
+var checkbox =
+  nextName >>= fun (name) {
+  retern ((<input type="checkbox" name="{name}" value="yes" />,
+           fun (env) { (memassoc(name, env)) }))};
+
+
+# before ++ [selected] ++ after is a list of (value, data) pairs
+# layout is a function for rendering a list of (radio button, data) pairs
+#
+# [NOTE]
+#   A default selection is compulsory as recommended by the HTML spec.
+#   We should probably do the same for 'choice' (drop-down menus) as well.
+#
+# It is the users responsibility to ensure that layout produces Xml that
+# uses each radio button exactly once and does not introduce any other input
+# elements.
+#
+# The data components are useful for attaching extra data such as labels to
+# the radio buttons.
+sig inputRadiogroup : ([(String, a::M)], (String, a::M), [(String, a::M)], ([(Xml, a::M)]) -> Xml) -> Formlet (String) 
+fun inputRadiogroup(before, selected, after, layout) {
+  nextName >>= fun (name) {
+    var before = for (var (value, data) <- before)
+                  [(<input type="radio" name="{name}" value="{value}" />, data)];
+    var selected = [(<input type="radio" checked="on" name="{name}" value="{selected.1}" />, selected.2)];
+    var after = for (var (value, data) <- after)
+                  [(<input type="radio" name="{name}" value="{value}" />, data)];
+    
+    retern ((layout(before ++ selected ++ after), fun (env) { (assoc(name, env))}))
+  }
+}
+
+sig preludeOption : ((a::M,String), Bool) -> State(Names,(Xml, (((String) -> [a::M]) -> (String) -> [a::M])))
+fun preludeOption ((a,b), selected) {
+   nextName >>= fun (name) {
+	if(selected) {
+	   retern ((<option value="{name}" selected="SELECTED">{stringToXml(b)}</option>,
+            (fun (k) (key) { if (key == name) a::k(key) else k(key) })))
+	}
+	else {
+	   retern ((<option value="{name}">{stringToXml(b)}</option>,
+            (fun (k) (key) { if (key == name) a::k(key) else k(key) })))
+	}
+}}
+
+
+sig preludeOptions : ([(a::M,String)], a::M) -> State(Names,(Xml, (String) -> [a::M]))
+fun preludeOptions(items, default) {
+  switch (items) {
+     case [] -> retern ((<#/>, fun (_) { [] }))
+     case item::items -> preludeOption(item, (first(item) == default))
+                     >>= fun ((xml, r1)) { preludeOptions(items, default)
+                                         >>= fun ((morexml, r2)) { retern ((xml ++ morexml, r1(r2))) } }
+  }
+}
+
+#TODO: illegal combination of fable annotations
+sig preludeMultiOptions : ([(a::M,String,Bool)]) -> State(Names,(Xml, (String) -> [a::M]))
+fun preludeMultiOptions(items) {
+  switch (items) {
+     case [] -> retern ((<#/>, fun (_) { [] }))
+     case item::items -> preludeOption((first(item),second(item)), third(item))
+                     >>= fun ((xml, r1)) { preludeMultiOptions(items)
+                                         >>= fun ((morexml, r2)) { retern ((xml ++ morexml, r1(r2))) } }
+  }
+}
+
+sig choice : ([(a::M,String)]) -> Formlet (a)
+fun choice (items) {
+   var (default, _) = hd(items);
+  nextName >>= fun (name) {
+  preludeOptions(items, default) >>= fun ((xml, retrieve)) {
+  retern ((<select name="{name}">{xml}</select>,
+           fun (env) { hd(retrieve(assoc(name, env))) }))}}
+}
+
+sig choiceDefault : ([(a::M,String)], a::M) -> Formlet (a)
+fun choiceDefault (items, default) {
+  nextName >>= fun (name) {
+     preludeOptions(items, default) >>= fun ((xml, retrieve)) {
+        retern ((<select name="{name}">{xml}</select>,
+                 fun (env) { hd(retrieve(assoc(name, env))) }))
+     }
+  }
+}
+
+sig choices : ([(a::M,String, Bool)]) -> Formlet ([a::M])
+fun choices (items) {
+  nextName >>= fun (name) {
+     preludeMultiOptions(items) >>= fun ((xml, retrieve)) {
+        retern ((<select name="{name}" multiple="multiple">{xml}</select>,
+                 fun (env) { concat(map(retrieve, assocAll(name,env))) }))
+     }
+  }
+}
+
+sig choicesNone : ([(a::M, String)]) -> Formlet ([a::M])
+fun choicesNone (items) {
+  choices (map (fun ((v, name)) {(v, name, false)}, items))
+}
+
+### Formlet stuff ###
+sig inputPassword : Formlet (String)
+var inputPassword = 
+   nextName >>= fun (name) {
+   (retern ((<input name="{name}" type="password" />,
+            fun (env) { assoc(name, env)})))};
+
+sig loginFormlet : Formlet ((username:String, password:String))
+var loginFormlet =
+  formlet 
+  <#>
+    <table>
+      <tr>
+        <td>Username:</td>
+        <td>{input -> username}</td>
+      </tr>
+      <tr>
+        <td>Password:</td>
+        <td>{inputPassword -> passwd}</td>
+      </tr>
+      <tr><td>{ submitButton("Login", ()) -> login }</td></tr>
+    </table>
+  </#>
+  yields
+  (username=username, password=passwd);
+var emptyXmlString = stringToXml("");
+
+sig fst : ((a::M,b)) -> a
+fun fst ((x,_)) { x }
+
+sig snd : ((a,b::M)) -> b
+fun snd ((_,y)) { y }
+
+sig eq : (b,b) -> Bool
+fun eq(x,y) { x == y }
+
+fun nth(ls, n) server {
+  switch (ls) {
+    case ([]) -> Nothing
+    case (l::ls) -> 
+      switch (n) {
+        case 0 -> Just(l)
+        case _ -> nth (ls,n-1)
+      }
+  }
+}
+
+sig mapNumbered : ((Int,a::M) -> b::M, [a::M]) -> [b::M]
+fun mapNumbered(f,xs) {
+  fun mapNumbered_(n,xs) {
+    switch(xs) {
+      case x::xs -> 
+        f(n,x) :: mapNumbered_(n+1,xs)
+      case [] -> []
+    }
+  }
+  mapNumbered_(0,xs)
+}
+
+sig searchEq : ((a,a) -> Bool, a, [a]) -> Maybe (a)
+fun searchEq(eq, x, ys) {
+  search(fun (y) { eq(x,y) }, ys)
+}
+
+sig partition : ((a) -> Bool, [a]) -> ([a], [a])
+fun partition(p, xs) {
+  (filter(p,xs),filter(compose(not,p),xs))
+}
+
+sig split : ([a], a) -> [[a]]
+fun split(s, div) {
+  fun split_(cur, ins) {
+    switch (ins) {
+      case c::ins -> 
+        if (c == div) cur :: split_([], ins)
+        else split_(cur++[c], ins)
+      case [] -> [cur]
+    }
+  }
+  split_([], s)
+}
+
+fun removeWhiteSpace(s) {
+  fun isWhiteSpace(c) {
+    switch (c) {
+      case ' '    -> true
+      case '\011' -> true # \t
+      case '\012' -> true # \n
+      case '\013' -> true # \r
+      case _ -> false
+    }
+  }
+  filter(compose(not,isWhiteSpace),s)
+}
+
+# remove all duplicates from a list.
+# the list must be have all duplicate items grouped (e.g., sorted)
+sig nubByGrouped : ((a,a) -> Bool, [a]) -> [a]
+fun nubByGrouped (eq, xs) {
+  fun removeDupes_h (prev,xs) {
+    switch (xs) {
+      case x::xs -> 
+        if (eq(prev,x))
+          removeDupes_h(prev,xs) 
+        else
+          x :: removeDupes_h(x,xs)
+      case [] -> []
+    }
+  }
+  switch (xs) {
+    case x::xs -> x :: removeDupes_h(x,xs)
+    case [] -> []
+  }
+}
+
+sig catMaybes : ([Maybe (a)]) -> [a]
+fun catMaybes(ms) {
+  switch (ms) {
+    case Just (m)::ms -> m :: catMaybes(ms)
+    case Nothing::ms -> catMaybes(ms)
+    case [] -> []
+  }
+}
+
+typename Ordering = [| GT | EQ | LT |];
+
+sig compare : (b, b) -> Ordering
+fun compare(x,y) {
+  if (x == y) EQ
+  else if (x < y) LT
+  else GT
+}
+
+sig iter : (((a) -> ()), [a]) -> ()
+fun iter(f, xs) {
+  switch (xs) {
+    case x::xs -> f(x); iter(f,xs)
+    case [] -> ()
+  }
+}
+
+sig elem : ([a],a) -> Bool
+fun elem(xs,y) {
+  switch (xs) {
+    case [] -> false
+    case x::xs ->
+      if (x==y) true
+      else elem(xs,y)
+  }
+}
+
+# for each y in ys, concat to xs if not (elem y xs)
+# assumes xs has no duplicates
+sig union : ([a],[a]) -> [a]
+fun union(xs,ys) {
+  switch (ys) {
+    case [] -> xs
+    case y::ys ->
+      var xs = 
+      if (elem(xs,y)) xs
+      else y::xs;
+      union(xs,ys)
+  }
+}
+
+# monads for maybe types
+sig bindMaybe : (Maybe (a), (a) -> Maybe (b)) -> Maybe (b)
+fun bindMaybe(val, f) {
+  switch (val) {
+    case Just(v) -> f(v)
+    case Nothing -> Nothing
+  }
+}
+
+infixl 1 ?>>=;
+sig ?>>= : (Maybe (a), (a) -> Maybe(b)) -> Maybe (b)
+op (x) ?>>= f {
+  bindMaybe(x,f)
+}
+
+infixl 1 ?>>;
+sig ?>> : (Maybe (a), Maybe(b)) -> Maybe (b)
+op (x) ?>> y {
+  fun f (_) { y }
+  bindMaybe(x,f)
+}
+
+# if both values present, apply function f
+# if only one value, return that value
+# if neither, return Nothing
+sig maybeApply : ((a,a) -> a, Maybe (a), Maybe (a)) -> Maybe (a)
+fun maybeApply(f, x, y) {
+  switch ((x,y)) {
+    case (Just (x), Just (y)) -> Just (f(x,y))
+    case (Just (_), Nothing) -> x
+    case (Nothing, Just (_)) -> y
+    case (_, _) -> Nothing
+      
+  }
+}
+
+# Checked (Exception type)
+
+typename Exception =
+[| SecurityException : String
+ | RuntimeException : String
+ | PathException : String
+ |];
+
+typename Checked (a::M) = 
+[| OK : a 
+ | Exception : Exception
+|];
+
+sig throw : (Exception) -> Checked (a::M)
+fun throw(e) { Exception(e) }
+
+sig exceptionToString : (Exception) -> String
+fun exceptionToString(e) {
+  switch (e) {
+    case SecurityException(err) -> "SecurityException: "++err
+    case RuntimeException(err) -> "RuntimeException: "++err
+    case PathException(err) -> "PathException: "++err
+    case _ -> "Unknown exception"
+  }
+}
+
+fun exceptionToError(e) { error(exceptionToString(e)) }
+
+sig catch : (Checked (a::M)) -> a
+fun catch(val) { catchWithHandler(val)(exceptionToError) }
+
+sig catchWithHandler : (Checked (a::M)) -> ((Exception) -> a) -> a
+fun catchWithHandler(val)(handler) {
+  switch (val) {
+    case OK (v) -> v
+    case Exception (e) -> handler(e)
+  }
+}
+
+sig bindChecked : (Checked (a::M), (a) -> Checked (b::M)) -> Checked (b)
+fun bindChecked(val, f) {
+  switch (val) {
+    case OK (v) -> f(v)
+    case Exception (e) -> Exception(e)
+  }
+}
+
+infixl 1 +>>=;
+sig +>>= : (Checked (a::M), (a) -> Checked(b::M)) -> Checked (b)
+op (x) +>>= f {
+  bindChecked(x,f)
+}
+
+infixl 1 +>>;
+sig +>> : (Checked (a), Checked(b::M)) -> Checked (b)
+op (x) +>> y {
+  fun f (_) { y }
+  bindChecked(x,f)
+}
+
+sig returnChecked : (a) -> Checked(a)
+fun returnChecked(x) { OK(x) }
+
+sig liftChecked : ((a) -> b) -> (a) -> Checked (b)
+fun liftChecked(f)(x) { returnChecked(f(x)) }
+
+sig sequenceChecked : ([Checked(a)]) -> Checked([a])
+fun sequenceChecked(cs) {
+  switch (cs) {
+    case OK(x)::cs -> 
+      switch (sequenceChecked(cs)) {
+        case OK(xs) -> OK(x::xs)
+        case Exception(e) -> Exception(e)
+      }
+    case Exception(e)::_ -> Exception(e)
+    case [] -> OK([])
+  }
+}
+
+sig mapChecked : ((a) -> Checked(b), [a]) -> Checked([b])
+fun mapChecked(f, xs) { sequenceChecked(map(f,xs)) }
+
+sig catchMaybe : (Checked (a)) -> Maybe (a)
+fun catchMaybe(x) { 
+  switch (x) {
+    case OK (x) -> Just (x)
+    case _ -> Nothing
+  }
+}
+
+# Ignore a Checked non-action
+sig suppress : (Checked (())) -> ()
+fun suppress(_) { () }
+
+# # Wrap a Checked thunk in a transaction
+# sig doTransaction : (Database) -> (() -> Checked (a)) -> Checked (a)
+# fun doTransaction(db)(checked) {
+#   startTransaction(db);
+#   var r = checked ();
+#   switch (r) {
+#     case OK(_) -> commitTransaction(db)
+#     case Exception(e) -> 
+#       debug("*** Transaction Failed ***");
+#       debug(exceptionToString(e));
+#       rollbackTransaction(db)
+#   };
+#   r
+# }
+
+
+# old string-based labels.
+# we keep these around as an intermediary format 
+# between new Labels and full Strings
+typename SLabel = mu label . (name : String, args : [label]);
+
+# Constructors
+fun mkSLabel(name) { (name=name, args=[]) }
+fun mkSLabelArgs(name, args) {
+  fun addArgToSLabel(l:SLabel, arg) { #TODO: remove type annotation
+    (l with args=arg::l.args)
+  }
+  fold_left(addArgToSLabel, mkSLabel(name), args)
+}
+
+# SLabel <-> String|Xml conversions
+fun slabelToString(l) {
+  fun l2s(l:SLabel) {
+    var args = 
+    switch (ls2s(l.args)) {
+      case [] -> ""        # show "readers" instead of "readers[]"
+      case args -> "[" ++ args ++ "]"
+    };
+    l.name ++ args
+  }
+  fun ls2s(ls) { switch (ls) {
+    case [l] -> l2s(l)
+    case l::ls -> l2s(l) ++ "," ++ ls2s(ls)
+    case [] -> ""
+  }}
+  l2s(l)
+}
+
+# I don't think Links' regex is advanced enough for this :/
+# this could probably be greatly simplified
+# Reads strings of the form:
+# ACL[READ[secret[],public[]],WRITE[secret[]]]
+# leaving off empty lists is also valid, e.g.,
+# ACL[READ[secret,public],WRITE[secret]]
+fun stringToSLabel(s) {
+  fun s2l(s) {
+    var (ln,argStr) = splitSLabel("", s);
+    var sargs =
+    if (argStr == []) { [] }
+    else { splitArgs(argStr, 0, "") };
+    var largs = map(s2l, sargs);
+    mkSLabelArgs(ln, largs)
+  }
+
+  fun splitSLabel(ln,s) {
+    switch (s) {
+      case '['::cs -> 
+        # end of arg list
+        var args = take(length(cs)-1, cs);
+        (ln,args)
+      case c::cs -> 
+        # part of labelname
+        splitSLabel(ln++[c], cs)
+      case [] -> 
+        # end of everything, return full label (this shouldn't happen)
+        (ln,[])
+    }
+  }
+
+  # READ[...],WRITE[...] -> [READ[...],WRITE[...]]
+  fun splitArgs(s,lv,arg) {
+    switch (s:[Char]) {
+       case '['::cs -> 
+         # start of arg list
+         splitArgs(cs, lv+1, arg++"[")
+      case ']'::cs -> 
+        # end of arg list
+        var lv = lv-1;
+        splitArgs(cs,lv,arg++"]")
+      case ','::cs ->
+        # next arg list
+        if (lv == 0) arg :: splitArgs(cs,lv,"")
+        else splitArgs(cs,lv,arg++",")
+      case c::cs -> 
+        # part of labelname
+        splitArgs(cs, lv, arg++[c])
+      case [] -> 
+        # end of everything
+        if (lv == 0) [arg]
+        else error("Not a valid label!")
+    }
+  }
+
+  s2l(removeWhiteSpace(s))
+}
+
+fun slabelToXml(l) {
+  fun l2x(n,t)(xml,l) {
+    var xml = 
+    if (t) {
+      xml ++ <br/> ++ stringToXml(replicate(n,'.') ++ l.name)
+    } 
+    else {
+      xml ++ stringToXml("." ++ l.name)
+    };
+    switch (l.args) {
+      case [l] -> l2x(n+1,false)(xml,l)
+      case ls -> fold_left(l2x(n+1,true), xml, ls)
+    }
+  }
+  l2x(0,true)(emptyXmlString,l)
+}
+typename Group = [| 
+  Administrators | Auditors | Authors | Guests | Brian
+|];
+
+fun groupToString(g:Group) {
+  switch (g) {
+    case Administrators -> "administrators"
+    case Auditors -> "auditors"
+    case Authors -> "authors"
+    case Guests -> "guests"
+    case Brian -> "Brian"
+  }
+}
+
+fun stringToGroup(s) {
+  switch (s) {
+    case "administrators" -> Administrators
+    case "auditors" -> Auditors
+    case "guests" -> Guests
+    case "authors" -> Authors
+    case "Brian" -> Brian
+    case "demo" -> Guests
+    case _ -> error("stringToGroup: unknown group: " ++ s)
+  }
+}
+# new type-based Label
+
+# Labels are defined in parts below, but are effectively:
+# typename Label = 
+# [| Composite : (acl : Acl, prov : Prov)
+#  | Acl : (read : [Group], write : [Group])
+#  | Prov : [(oper : ProvOp, details...)]
+# |];
+
+typename LabelList (a) = mu l. [| Cons : (a, l) | Nil |];
+
+sig llistToList : (LabelList(a)) -> [a]
+fun llistToList(ls) {
+  switch (ls) {
+    case Nil -> []
+    case Cons (l,ls) ->
+        l :: llistToList(ls)
+  }
+}
+
+sig listToLlist : ([a]) -> LabelList(a)
+fun listToLlist(l) {
+  fun folder(a, accu) {
+	Cons(a, accu)
+  }
+  fold_right(folder, Nil, l)
+}
+
+sig llelem : (LabelList(a), a) -> Bool
+fun llelem(xs,y) {
+  switch (xs) {
+    case Nil -> false
+    case Cons (x, xs) ->
+      if (x==y) true
+      else llelem(xs,y)
+  }
+}
+
+
+# for each y in ys, concat to xs if not (elem y xs)
+# assumes xs has no duplicates
+sig llunion : (LabelList(a), LabelList(a)) -> LabelList(a)
+fun llunion(xs,ys) {
+  switch (ys) {
+    case Nil -> xs
+    case Cons (y, ys) ->
+      var xs = 
+      if (llelem(xs,y)) xs
+      else Cons (y,xs);
+      llunion(xs,ys)
+  }
+}
+
+
+
+sig llreverse : (LabelList(a)) -> LabelList(a)
+fun llreverse(xs) {
+  fun aux(xs,ys) {
+    switch (xs) {
+      case Nil -> ys
+      case Cons (x, xs) -> aux(xs, Cons(x, ys))
+    }
+  }
+  aux(xs,Nil)
+}
+
+sig llmap : ((a) -> b, LabelList(a)) -> LabelList(b)
+fun llmap(f, ls) {
+  fun aux(f, ls, accu) {
+    switch (ls) {
+	  case Nil -> llreverse(accu)
+	  case Cons (a, tl) -> aux(f, tl, Cons(f(a), accu))
+    }
+  }	
+  aux(f, ls, Nil)
+}
+
+sig llconcat : (LabelList(a), LabelList(a)) -> LabelList(a)
+fun llconcat(xs,ys) {
+  var xsr = llreverse(xs);
+  fun aux(xs,ys) {
+    switch (xs) {
+      case Nil -> ys
+      case Cons (x,xs) ->
+        aux(xs, Cons(x,ys))
+    }
+  }
+  aux(xsr,ys)
+}
+
+sig llsearch : ((a) -> Bool, LabelList (a)) -> Maybe (a)
+fun llsearch(p,l) {
+  switch (l) {
+    case Nil -> Nothing
+    case Cons (x,xs) -> if (p(x)) Just(x)
+      else llsearch(p,xs)
+  }
+}
+
+
+# typename ProvOp = [| CreatePage | Label | Modify | Paste |];
+# typename ProvAction = (
+#   oper : ProvOp,
+#   user : String,
+#   date : String,
+#   time : String,
+#   desc : String
+# );
+
+typename Acl = (read : LabelList(Group), write : LabelList(Group));
+typename Acl2 = 
+  [| Acl2 : (read : LabelList(Group), write : LabelList(Group)) |];
+
+typename ProvOp =  [| Create | Modify | Copy | Delete | Restore | Relabel |];
+typename ProvAction = (oper : ProvOp, user : Group);
+typename Prov = LabelList (ProvAction);
+
+typename Label = mu label . 
+[| Composite : LabelList(label)
+ | Acl : Acl
+ | Prov : Prov
+|];
+
+# functions below are mostly related to translating to/from strings
+# This is needed to display the label to user,
+# and (currently) for persistence to the database
+
+sig defaultLabel : Label is lab
+var defaultLabel = Acl (read=Nil,write=Nil);
+
+fun provOpToString(p) {
+  switch (p) {
+    case Create -> "CREATE"
+    case Modify -> "MODIFY"
+    case Copy -> "COPY"
+    case Delete -> "DELETE"
+    case Restore -> "RESTORE"
+    case Relabel -> "RELABEL"
+  }
+}
+
+sig labelToSLabel : (Label) -> SLabel
+fun labelToSLabel(l) {
+  switch (l) {
+    case Composite (ls) ->
+      mkSLabelArgs("SECURITY", llistToList(llmap(labelToSLabel, ls)))
+
+    case Acl (read=r:LabelList(Group), write=w:LabelList(Group))  ->
+       mkSLabelArgs("ACL", [
+         mkSLabelArgs("READ",  llistToList(llmap(compose(mkSLabel, groupToString), r))),
+         mkSLabelArgs("WRITE", llistToList(llmap(compose(mkSLabel, groupToString), w)))
+       ])
+
+    case Prov (ps) ->
+      fun provActionToSLabel((oper=pop, user=g)) {
+        var opLabel = provOpToString(pop);
+        var groupLabel = groupToString(g);
+        mkSLabelArgs(opLabel, [mkSLabel(groupLabel)])
+      }
+      mkSLabelArgs("PROV", llistToList(llmap(provActionToSLabel, ps)))
+  }
+}
+
+fun stringToProvOp(s) {
+  switch (s) {
+    case "CREATE" -> Create
+    case "MODIFY" -> Modify
+    case "COPY" -> Copy
+    case "DELETE" -> Delete
+    case "RESTORE" -> Restore
+    case "RELABEL" -> Relabel
+    case _ -> error("stringToProvOp: unknown provOp: " ++ s)
+  }
+}
+
+sig slabelToAcl : (SLabel) -> Acl
+fun slabelToAcl(l) {
+  fun getGroup(type) { 
+    switch (search(fun (l) { l.name == type }, l.args)) {
+      case Just (l) -> 
+        listToLlist(map(compose(stringToGroup,fun (l) {l.name}), l.args))
+      case Nothing -> Nil
+    }
+  }
+ (read=getGroup("READ"), write=getGroup("WRITE"))
+}
+
+sig slabelToProv : (SLabel) -> Prov
+fun slabelToProv(l) {
+  # get down to operation level
+  fun findLab(name, ls:[SLabel]) {
+    switch (ls) {
+      case [] -> error("labelToLabel: field " ++ name ++ " should be present")
+      case l::ls2 ->
+        if (l.name == name) (hd(l.args)).name
+        else {
+          var l = findLab(name, ls2);
+          l
+        }
+        #error("findLab: "++ name ++" <> "++l.name)
+    }
+  }
+  fun getSingletonChild(l:SLabel) {
+    switch (l.args) {
+      case [l] -> l
+      case _ -> error("not singleton label")
+    }
+  }
+  var actions = (getSingletonChild(l)).args;
+  listToLlist(map(
+    fun (pa) {
+      var o = getSingletonChild(pa);
+      var oper = stringToProvOp(o.name);
+      var user = findLab("USER", o.args);
+      var user = stringToGroup(user);
+      (oper = oper, user = user)
+    },
+    actions
+  ))
+}
+
+sig slabelToLabel : (SLabel) -> Label is lab
+fun slabelToLabel(l) {
+  switch (l.name) {
+    case "SECURITY" ->
+      switch (l.args) {
+        case [] -> error("slabelToLabel: empty SECURITY S-Label")
+        case [l] -> slabelToLabel(l)
+        case ls ->
+          Composite (listToLlist(map(slabelToLabel, ls)))
+      }
+
+    case "ACL" -> Acl (slabelToAcl(l))
+    case "PROV" -> Prov (slabelToProv(l))
+    case _ -> error("labelToLabel: Cannot translate Label "
+      ++ l.name ++" to Label")
+  }
+}
+
+
+
+#sig labelToString : (Label is lab) -> String
+fun labelToString (l) { compose(slabelToString, labelToSLabel)(l) }
+
+var stringToLabel = compose(slabelToLabel, stringToSLabel);
+var labelToXml = compose(slabelToXml, labelToSLabel);
+
+# this is the same as labelToString, but uses braces rather than brackets, 
+# and semicolons rather than commas
+# so that the resulting string can be stored in a label without being
+# interpreted as a label
+#sig labelToEscapedString : (Label is lab) -> String
+fun labelToEscapedString(l) {
+  map(
+    fun (c) { switch (c) {
+      case '[' -> '{'
+      case ']' -> '}'
+      case ',' -> ';'
+      case _ -> c
+    }}, labelToString(l)
+  )
+}
+
+
+
+sig mkAclLabel : ([String],[String]) -> Label is lab
+fun mkAclLabel(rs,ws) {
+  var rs = listToLlist(map(stringToGroup,rs));
+  var ws = listToLlist(map(stringToGroup,ws));
+  Acl (read=rs, write=ws)
+}
+
+sig mkProvLabel : (ProvOp, Group) -> Label is lab
+fun mkProvLabel(opr, group) {
+  Prov (Cons ((
+    oper = opr,
+    user = group
+  ), Nil))
+}
+
+# sig mkProvLabel : (ProvOp, String, String) -> Label
+# fun mkProvLabel(opr, user, desc) {
+#   Prov ([(
+#     oper = opr,
+#     user = user,
+#     date = getLocalDate(),
+#     time = getLocalTime(),
+#     desc = desc
+#   )])
+# }
+
+# sig getCreator : (Label) -> Maybe(String)
+# fun getCreator(l) { 
+#   fun isCreatePage(p) { switch (p) {
+#     case (oper=CreatePage|p) -> true
+#     case _ -> false
+#   }}
+#   switch (getProv(l)) {
+#     case OK (ps) ->
+#       switch (search(isCreatePage, ps)) {
+#         case Just (user=u|p) -> Just(u)
+#         case _ -> Nothing
+#       }
+#     case _ -> Nothing
+#   }
+# }
+          
+sig joinAcl : (Acl, Acl) -> Acl
+fun joinAcl((read=rs1,write=ws1), (read=rs2,write=ws2)) {
+  (read=llunion(rs1,rs2), write=llunion(ws1,ws2))
+}
+
+sig joinProv : (Prov,Prov) -> Prov
+fun joinProv(ps1, ps2) {
+  llunion(ps1, ps2)
+}
+
+# ugly function
+sig joinLabels : (Label is lab, Label is lab) -> Label is lab
+fun joinLabels(l1, l2) {
+  switch((l1,l2)) {
+	case (Acl(acl1), Acl(acl2)) -> Acl(joinAcl(acl1, acl2))
+	case _ -> error("NYI")
+  }
+}        
+
+# sig joinLabels2 : (Label is lab, Label is lab) -> Label is lab
+# fun joinLabels2(l1, l2) {
+#   fun getLabels(l) {
+#     switch (l) {
+#       case Acl (a) -> (Just (a), Nothing)
+#       case Prov (p) -> (Nothing, Just (p))
+#       case Composite (_) -> (catchMaybe(getAcl(l)), catchMaybe(getProv(l)))
+#     }
+#   }
+#   var (a1,p1) = getLabels(l1);
+#   var (a2,p2) = getLabels(l2);
+#   var a = maybeApply(joinAcl, a1, a2);
+#   var p = maybeApply(joinProv, p1, p2);
+#   switch ((a,p)) {
+#     case (Just(a), Just(p)) -> Composite ([Acl(a),Prov(p)])
+#     case (Just(a), Nothing) -> Acl (a)
+#     case (Nothing, Just(p)) -> Prov (p)
+#     case (_, _) -> error("joinLabels: empty label!")
+#   }
+# }        
+
+# Fetch the ACL portion of a Label, if possible
+sig getAcl : (Label) -> Checked (Acl)
+fun getAcl(l) {
+  switch (l) {
+    case Acl (a) -> OK (a)
+    case Composite (Cons(Acl (a), _)) -> OK (a)
+    case Composite (Cons(_, tl)) -> getAcl(Composite(tl))
+    case _ -> throw(
+      RuntimeException("getAcl: Requires Acl Label!"))
+  }
+}
+
+sig getProv : (Label) -> Checked (Prov)
+fun getProv(l) {
+  switch (l) {
+    case Prov (p) -> OK (p)
+    case Composite (Cons(Prov (p), _)) -> OK (p)
+    case Composite (Cons(_, tl)) -> getProv(Composite(tl))
+    case _ -> throw(
+      RuntimeException("getProv: Requires Prov Label!"))
+  }
+}
+
+
+sig splitAcl : (Acl) -> LabelList(Label)
+fun splitAcl((read=rs,write=ws)) {
+  var result = 
+  llconcat(
+    llmap(fun (g) { Acl (read=Cons(g,Nil),write=Nil) }, rs),
+    llmap(fun (g) { Acl (read=Nil,write=Cons(g, Nil)) }, ws)
+  );
+  result
+}
+
+
+# make a formlet allowing the user to edit the label from a list of available 
+# labels
+#sig makeLabelFormlet : ([Label is lab], Label is lab) -> Formlet(Label is lab)
+sig makeLabelFormlet : ([Label is lab], Label is lab) -> Formlet(Label is lab)
+fun makeLabelFormlet(userLabels, curLabel) {
+  
+  var curLabels = 
+  switch (getAcl(curLabel)) {
+    case OK (a) -> splitAcl(a)
+    case _ -> Nil
+  };
+
+  var curLabels2 = llistToList(llmap(labelToString, curLabels));
+
+  # is available label currently included?
+  fun labelIncluded(al) {
+    switch (searchEq(eq, al, curLabels2)) {
+      case Nothing -> false
+      case _ -> true
+    }
+  }
+
+  var labelList =
+  map (
+    fun (l) {
+      var sl = labelToString(l);
+      (l, sl, labelIncluded(sl))
+    }, userLabels
+  );
+
+  # add a default option if none of above are selected
+  var labelList = 
+  switch (search (third, labelList)) {
+    case Nothing -> 
+      var default = (defaultLabel, "Default", true);
+      [default]
+    case _ -> labelList
+  };
+
+  formlet 
+  <#>
+  { choices (labelList) -> labels }
+  </#>
+  yields
+  fold_left1(joinLabels, labels)
+}    
+
+# sig joinProv : (Prov,Prov) -> Prov
+# fun joinProv(ps1, ps2) {
+#   union(ps1,ps2)
+# }
+
+# ugly function
+# sig joinLabels : (Label, Label) -> Label
+# fun joinLabels(l1, l2) {
+#   fun getLabels(l) {
+#     switch (l) {
+#       case Acl (a) -> (Just (a), Nothing)
+#       case Prov (p) -> (Nothing, Just (p))
+#       case Composite (_) -> (catchMaybe(getAcl(l)), catchMaybe(getProv(l)))
+#     }
+#   }
+#   var (a1,p1) = getLabels(l1);
+#   var (a2,p2) = getLabels(l2);
+#   var a = maybeApply(joinAcl, a1, a2);
+#   var p = maybeApply(joinProv, p1, p2);
+#   switch ((a,p)) {
+#     case (Just(a), Just(p)) -> Composite ([Acl(a),Prov(p)])
+#     case (Just(a), Nothing) -> Acl (a)
+#     case (Nothing, Just(p)) -> Prov (p)
+#     case (_, _) -> error("joinLabels: empty label!")
+#   }
+# }        
+
+
+
+############################################################
+# Combining Labels and exceptions
+############################################################
+
+sig mklabeled : phantom _ .x<-(a is lab) -> (b::M) -> Checked(b{x.1})
+fun mklabeled (l) (b) {
+    OK(relabel(b,l))
+}
+
+#sig mklabeled : phantom _ .x<-(a::L is lab) -> (b::M) -> Checked(b{x.1})
+#fun mklabeled (l) (b) {
+#    OK(relabel(b,l))
+#}
+
+
+# make a formlet allowing the user to edit the label from a list of available 
+# labels
+# sig makeLabelFormlet : ([Label], Label) -> Formlet(Label)
+# fun makeLabelFormlet(userLabels, curLabel) {
+#   #sig splitAcl : (Acl) -> [Label]
+#   fun splitAcl((read=rs,write=ws)) {
+#     map(fun (g) { Acl (read=[g],write=[]) }, rs)
+#     ++ map(fun (g) { Acl (read=[],write=[g]) }, ws)
+#   }
+  
+#   var curLabels = 
+#   switch (getAcl(curLabel)) {
+#     case OK (a) -> splitAcl(a)
+#     case _ -> []
+#   };
+#   var curLabels = map(labelToString, curLabels);
+#   # is available label currently included?
+#   fun labelIncluded(al) {
+#     switch (searchEq(eq, al, curLabels)) {
+#       case Nothing -> false
+#       case _ -> true
+#     }
+#   }
+
+#   var labelList =
+#   map (
+#     fun (l) {
+#       var sl = labelToString(l);
+#       (l, sl, labelIncluded(sl))
+#     }, userLabels
+#   );
+
+#   # add a default option if none of above are selected
+#   var labelList = 
+#   switch (search (third, labelList)) {
+#     case Nothing -> 
+#       var default = (defaultLabel, "Default", true);
+#       default::labelList
+#     case _ -> labelList
+#   };
+#   formlet 
+#   <#>
+#   { choices (labelList) -> labels }
+#   </#>
+#   yields
+#   fold_left1(joinLabels, labels)
+# }    
+############################################################
+# Table definitions
+############################################################
+var cpadb = database "selinks";
+
+var pages = table "pages" with (
+  pageid : Int, 
+  creator : Int, #make this into a label
+  title : String
+) where pageid readonly from (cpadb);
+
+var page_blocks = table "page_blocks" with (
+  blockid : Int,
+  pageid : Int,
+  parentblockid : Int, 
+  sibling : Int, 
+  blocktype : String, 
+  text : String
+) where blockid readonly from (cpadb);
+
+var tag_user_xref = table "tag_user_xref" with (
+  tagid : Int,
+  userid : Int
+) from (cpadb);
+
+var block_label = table "block_label" with (
+  pageid : Int,
+  blockid : Int,
+  label : String
+) from (cpadb);
+
+var usersTable = table "users" with (
+  userid : Int,
+  name : String, 
+  password : String, 
+  credential : Int
+) where userid readonly from (cpadb);
+
+var block_format  = table "block_format" with (
+  pageid : Int, 
+  blockid : Int, 
+  formattag : String, 
+  userid : Int
+) from cpadb;
+
+var tags = table "tags" with (
+  tagid : Int,
+  name : String
+) from cpadb;
+
+## End of table defs ##
+
+### Oracle/Database calls ###
+
+# Is the supplied username, password represent a valid user?
+sig dbcheckLogin : (String, String) -> Maybe ((name:String, userid:Int))
+fun dbcheckLogin(username, password) {
+  var us = for (var entry <-- usersTable) 
+  where ((entry.name == username)  &&
+  (entry.password == password))
+  [entry];
+  switch (us) {
+    case [r] -> Just ((name=r.name, userid=r.userid))
+    case _ -> Nothing
+  }
+}
+
+# Is userid a part of specified group?
+sig dbcanAccessTag : (Int) -> (Group) -> Bool
+fun dbcanAccessTag(userid)(group) {
+  var tagName = groupToString(group);
+  var results = 
+  for (var t <-- tags)
+    where (t.name == tagName)
+    for (var x <-- tag_user_xref)
+      where (x.tagid == t.tagid && x.userid == userid)
+      [t];
+      length(results) > 0
+}
+### Generic Policies ###
+
+# Cred needs to be defined before policies
+typename Auth = [| Accept | Deny |];
+typename Cred = (label: l<-Auth is lab, name : String, userid : Int{l});
+
+sig login : (String, String) -> Checked (Cred)
+fun login(username, password) policy {
+  switch (dbcheckLogin(username, password)) {
+    case Just (r) -> 
+      OK ((label=Accept, name=r.name, userid=relabel(r.userid, Accept)))
+    case Nothing -> 
+      throw(SecurityException("Wrong username/password"))
+  }
+}
+
+sig member : (Cred, LabelList(Group)) -> Bool
+fun member(cred, tags) policy {
+  unpack cred as (label=l, name=u, userid=id);
+  var userid = unlabel(id);
+  fun aux(tags) {
+    switch (tags) {
+      case Nil -> false
+      case Cons (tag,tags) ->
+        if (dbcanAccessTag(userid)(tag)) true
+        else aux(tags)
+    }
+  }
+  aux(tags)
+}
+
+sig access : (Cred, l<-Label is lab, a{l}) -> Checked (a)
+fun access(cred, l, x_l) policy { 
+  getAcl(l) +>>= fun (acl) {
+    var (read=rs, write=ws) = acl;
+    if (member(cred, rs)) OK(unlabel(x_l))
+    else throw(SecurityException("** Access denied **"))
+  }
+}
+
+sig accessForWriting : (Cred) -> (l<-Label is lab, a{l}) -> Checked (a)
+fun accessForWriting(cred)(l, x_l) policy { 
+  getAcl(l) +>>= fun (acl) {
+    var (read=rs, write=ws) = acl;
+    if (member(cred, ws)) OK(unlabel(x_l))
+    else throw(SecurityException("** Access denied **"))
+  }
+}
+
+sig applyWrite : 
+phantom _ . x<-(Cred, (a) -> Checked (b::M), l<-Label is lab, a{l}) 
+-> Checked (b{x.3})
+fun applyWrite(cred, f, l, x_l) policy {
+  accessForWriting(cred)(l, x_l) +>>= f +>>= mklabeled(l)
+}
+
+# applyInLabel is similar to applyWrite, but it only checks if we are 
+# allowed to access the labeled data, not to write to it.
+# It is therefore unsafe to allow non-policy code to call this directly;
+# (it should be private)
+# Could this be resolved by Labeling f somehow?
+sig applyInLabel : 
+phantom _ .x<-(Cred, (a) -> Checked (b::M), l<-Label is lab, a{l}) -> Checked (b{x.3})
+fun applyInLabel(cred, f, l, x_l) policy {
+  access(cred, l, x_l) +>>= f +>>= mklabeled(l)
+}
+
+# addLabel* is misnamed; it is really more of a "modify ACL labels"
+
+# this should eventually do some sort of access check
+# and do a join of the labels
+# sig addLabel : (Cred, Maybe (Label), Label, a) -> Checked (Labeled (a))
+# fun addLabel(_,_,_,x) policy { 
+#   OK (label(x))
+# }
+
+sig newLabel : phantom _ . y<-(Cred, Label is lab, a::M) -> Checked ((l<-Label is lab, a{l}))
+fun newLabel(cred, l, x) policy {
+  var x_l = relabel(x, l);
+  OK ((l, x_l))
+}
+
+sig addLabel : (Cred, l1<-Label is lab, Label is lab, a::M{l1}) -> Checked ((m<-Label is lab, a{m}))
+fun addLabel(cred, l1, l2, x_l1) policy {
+  var x = unlabel(x_l1);
+  var m = joinLabels(l1, l2); 
+  var x_m = relabel(x, m);
+  OK ((m, x_m))
+}
+
+########## PROVENANCE POLICIES ##########
+
+# Get the Role/Group that allows the specified credential write access 
+# as per the given label
+sig getRole : (Cred, Label) -> Checked (Group)
+fun getRole(cred, l) {
+  unpack cred as (label=l_, name=u, userid=id);
+  var userid = unlabel(id);
+  fun aux(tags) {
+    switch (tags) {
+      case Nil -> throw(RuntimeException(
+        "User " ++ u ++ " has no role within label " ++ labelToString(l))
+      )
+      case Cons (tag,ts) ->
+        if (dbcanAccessTag(userid)(tag)) OK(tag)
+        else aux(ts)
+    }
+  }
+  getAcl(l) +>>= fun (acl) {
+    var (read=rs, write=ws) = acl;
+    aux(ws)
+  }
+}
+
+sig newLabelProv : phantom _ . y<-(Cred, Label is lab, a::M) -> Checked ((m<-Label is lab, a{m}))
+fun newLabelProv(cred, l, x) policy {
+  var role = catch(getRole(cred, l));
+  #getRole(cred, l) +>>= fun (role) {
+  var p = mkProvLabel(Relabel, role);
+  var m = joinLabels(l,p);
+  var x_m = relabel(x, m);
+  OK ((m, x_m))
+}
+
+# so the return type is a (label, labeled) tuple
+# Arguments:
+#   m_old_l - the old label (if present; this is needed to because addLabel
+#             maintains all existing non-ACL labels)
+#   new_l - the new ACL label to add
+#   x - data to label. This data may already be labeled by old_l
+# Returns: a (label, labeled) tuple 
+#          (labeling with provenance causes the label itself to change)
+
+# sig addLabelProv_h : (Label is lab, Label is lab) -> Label is lab
+# fun addLabelProv_h(l1,l2) {
+#   switch (getProv(l1)) {
+#     case OK (prov) -> 
+#       var l1_prov:Label is lab = Prov (prov);
+#       var l3:Label is lab = joinLabels(l2, l1_prov);
+#       l3:Label is lab
+#     case Exception (_) -> l2:Label is lab
+#   }
+# }
+
+# sig addLabelProv : (Cred, l1<-Label is lab, Label is lab, a::M{l1}) -> Checked ((m<-Label is lab, a{m}))
+# fun addLabelProv(cred,l1,l2,x_l1) policy { 
+#   var x = unlabel(x_l1);
+#   var role = catch(getRole(cred, l1));
+#   var l3:Label is lab = 
+#   switch (getProv(l1)) {
+#     case OK (prov) -> 
+#       var l1_prov:Label is lab = Prov (prov);
+#       var l3:Label is lab = joinLabels(l2, l1_prov);
+#       l3:Label is lab
+#     case Exception (_) -> l2:Label is lab
+#   };
+#   var m_prov = mkProvLabel(Relabel, role);
+#   # var l2_prov = joinLabels(l1, l1_prov);
+#   #var m = joinLabels (l2_prov, l2);
+#   var m = joinLabels(l3, m_prov);
+#   var x_m = relabel(x, m);
+#   OK ((m, x_m))
+# }
+
+
+
+# sig addLabelProv : (Cred, Maybe (Label), Label, a) 
+# -> Checked ((Label, Labeled (a)))
+# fun addLabelProv(cred,m_old_l,new_l,x) policy { 
+#   var l_prov = mkProvLabel(Label, cred.name, labelToEscapedString(new_l));
+#   var new_l = 
+#   switch(m_old_l) {
+#     case Just(old_l) ->
+#       var l_prov = joinLabels(old_l, l_prov);
+#       switch (getProv(l_prov)) {
+#         case OK (l_prov) -> joinLabels(new_l, Prov (l_prov))
+#         case Exception (_) -> new_l
+#       }
+#     case Nothing -> 
+#       joinLabels(new_l, l_prov)
+#   };
+#   OK(new_l, label(x))
+# }
+
+
+typename Path = 
+  mu subpath . [| Destination | Child : subpath | ChildN : (Int,subpath) |];
+
+# . -> . -> .5 -> !
+sig pathToString : (Path) -> String
+fun pathToString(p) {
+  switch (p) {
+    case Child(p) -> ". -> " ++ pathToString(p)
+    case ChildN(n,p) -> "."++intToString(n)++" -> " ++ pathToString(p)
+    case Destination -> "!"
+  }
+}
+
+fun addChild(path)(p) { path(Child(p)) }
+fun addChildN(n)(path)(p) { path(ChildN(n,p)) }
+
+typename Whitespace = [| Space | NewLine | Tab | Crlf | EOF | Para | HLine |];
+
+typename FormatType = [| Bold | Emph | Sub | Sup | Del | Hdr1 | Hdr2 
+| WikiLink | Indent : Int 
+| Link : String | ImageLink : String | List | OrderedElt : String 
+| UnorderedElt : String | BlockQuote | WS : Whitespace |];
+
+
+typename BlockType (a) = mu block . 
+([| EmptyBlock 
+  | RestrictedBlock : String
+  | WordBlock : (a, String)
+  | FormattedBlock : (a, FormatType, block) 
+  | CompoundBlock : (a, [block]) 
+  | UnlabeledBlock : (a, Label is lab, block)
+  | LabeledBlock : (a, l<-Label is lab, block{l})
+  |]
+);
+
+typename NodeIdentifier = [| NewNode | NodeId : Int |];
+typename ViewAnnotation = 
+[| SplitBlock | ShowControls | ShowControlsOnce 
+| ShowLabels | HideControls | Bottom 
+|];
+
+typename DocAnnotation = 
+(node : NodeIdentifier, view : ViewAnnotation);
+
+var emptyAnnot = (node=NewNode, view=Bottom);
+
+typename Document = BlockType (DocAnnotation);
+typename ParseResult = 
+  [| None 
+   | Some : Document
+   | Error : String 
+   |]; 
+
+typename WikiPage = (
+  pageid : NodeIdentifier, 
+  title : String, 
+  body : Document
+);
+
+var emptyPage = (pageid=NewNode, title="", body=WordBlock(emptyAnnot, ""));
+
+fun emptyString() server { 
+    to_native_string("")
+}
+
+################################################################################
+ #++++++++++Server functions for parsing wiki markup into a ParseResult++++++++++
+################################################################################
+sig eatWhitespace : (NativeString) -> (ParseResult, NativeString)
+fun eatWhitespace(n) server {
+  fun whitespaceTag(s) {
+    switch(s) {
+      case "\r\n\r\n" -> Para
+      case "\r\n\n" -> Para
+      case "\n\n" -> Para
+      case "\x0c" -> EOF
+      case "------" -> HLine
+      case _ -> Space
+    }
+  }
+
+  var ws = (n ~ /^({"\r\n\r\n"}|{"\r\n\n"}|{"\n\n"}|{"\x0c"}|{"------"})/nl);
+    switch (ws) {
+      case [] -> 
+        (None, n)
+      case hd::tl -> 
+        var m = (n ~ s/^{hd}//nl);
+        (Some(FormattedBlock(emptyAnnot, WS(whitespaceTag(hd)), WordBlock(emptyAnnot, hd))), m)
+    }
+}
+
+sig makeSentenceBlock : (NativeString) -> (ParseResult, NativeString)
+fun makeSentenceBlock(text) server {
+  #includes trailing punctuation like commas etc.    
+  var word = (text ~ /^([^{"\r\n!"}\\<\\_\\^\\~\\[\\#\\*-])+/nl); 
+  switch (word) {
+    case [] -> 
+      (None, text)
+    case hd::tl -> 
+      var next = (text ~ s/^{hd}//n); #make sure that word is quoted correctly
+      (Some(WordBlock(emptyAnnot, hd)), next)
+  }
+}
+  
+
+sig makeFormattedBlock : (NativeString) -> (ParseResult, NativeString)
+fun makeFormattedBlock(text) server {
+
+  fun matchNth(f :[String], p) {
+    switch(p) {
+      # should be impossible to reach the end of this without finding a match
+      case [] -> Error("matchNth reached the end of the match list") 
+      case (ix, ftag)::tl -> 
+        switch (nth(f,ix)) {
+          case Nothing -> matchNth(f, tl)
+          case Just(text) -> 
+            if (text == "") {
+              matchNth(f, tl)
+            }
+            else {
+              var zz = textToBlock(to_native_string(text));
+              switch(zz) {
+                case(sw, _) ->
+                  switch(sw) {
+                    case Some(wb) -> 
+                      Some(FormattedBlock(emptyAnnot, ftag, wb))
+                    case _ -> sw
+                  }
+              }
+            }
+        }
+    }
+  }
+  
+  #2 is bold; 4 is emph; 6 is sub; 8 is del; 10 is sup
+
+  # |(-([^{"\r\n"}\\*]*)-)
+
+
+  var f = (text ~ /^({"**"}([^{"\r\n"}\\*]*){"**"})|({"*"}([^{"\r\n"}\\*]*){"*"})|({"_"}([^{"\r\n"}_]*){"_"})|(~([^{"\r\n"}~]*)~)|(--([^{"\r\n"}]+)--)|({"^"}([^{"\r\n"}\\^]*){"^"})|({"##"}([^{"\r\n"}#]*){"##"})|({"#"}([^{"\r\n"}#]*){"#"})|({"[["}([a-zA-Z0-9_ ]*){"]]"})/nl);
+
+  # var f = (text ~ /(^{"*"}([^\\*]*){"*"})|(^{"_"}([^_]*){"_"})/nl);
+
+  switch(f) {
+    case [] -> (None, text) 
+    case hd::tl -> 
+      var fb = matchNth(f, [(2, Bold), (4, Emph), (6, Emph), (8, Sub), (10, Del), (12, Sup), (14, Hdr2), (16, Hdr1), (18, WikiLink)]);
+      switch(fb ) {
+        case Some(_) -> 
+          var next = (text ~ s/^{hd}//nl);
+          (fb, next) : (ParseResult, NativeString)
+        case Error(e) ->  (Error(e), text) : (ParseResult, NativeString)
+        case None -> 
+          (Error("Unexpected return value of None"), text) : (ParseResult, NativeString)
+      }
+  }
+  
+}
+
+sig makeHref : (NativeString) -> (ParseResult, NativeString)
+fun makeHref(text) server {
+  #[Link text]  (http://foobar.com)  ... or <http://foobar.com/>
+  var h =(text ~ /^{"["}(.*){"]"} *{"("}([^ ]*){")"}|{"<"}([^ <>]*){">"}/nl);
+  
+  switch(h) {
+    case [] -> (None, text)
+      
+    case hd::[]::[]::lturl::tl->
+      var next = (text ~ s/^{hd}//nl);
+      (Some(FormattedBlock(emptyAnnot, Link(lturl), WordBlock(emptyAnnot, lturl))), next)
+      
+    case hd::linktext::url::tl ->
+      var next = (text ~ s/^{hd}//nl);
+      (Some(FormattedBlock(emptyAnnot, Link(url), WordBlock(emptyAnnot,linktext))), next)
+  }
+}
+
+sig makeImageLink : (NativeString) -> (ParseResult, NativeString)
+fun makeImageLink(text) server {
+  #  ![Alt Text](http://foobar.com/image.gif)
+  var h =(text ~ /^{"!["}(.*){"]"} *{"("}([^ ]*){")"}/nl);
+  switch(h) {
+    case [] -> (None, text)
+      
+    case hd::altText::url::tl ->
+      var next = (text ~ s/^{hd}//nl);
+      (Some(FormattedBlock(emptyAnnot, ImageLink(url), WordBlock(emptyAnnot, altText))), next)
+  }
+  
+}
+
+sig makeList : (NativeString) -> (ParseResult, NativeString)
+fun makeList(text) server {
+  fun allListLines(t, lines) {
+    
+    var listLine = (t ~ /^({"\n"}((    )*) *([0-9]+\.|[\\*\\+-]) (.*)){"\n"}/nl);
+    
+    switch(listLine) {
+      case [] -> 
+        var removedNl = (t ~ s/^{"\n"}//n);
+        switch(lines) {
+          case [] ->  (None, removedNl) : (ParseResult, NativeString)
+          case _ -> (Some(CompoundBlock(emptyAnnot, [WordBlock(emptyAnnot, "\n"),
+            FormattedBlock(emptyAnnot, List, CompoundBlock(emptyAnnot, reverse(lines)))])), removedNl) : (ParseResult, NativeString)
+        }
+      case (hd::notNl::indent::_::index::element::_) ->
+        var indentLevel = length(indent) / 4;
+        var next = (t ~ s/^{notNl}//nl); #prefix a new line that was consumed ... in case there's a another list element
+        var eblock  =  textToBlock(to_native_string(element ++ "\n"));
+        switch(eblock) {
+          case (b, _) ->
+            switch(b) {
+              case (Some(block)) ->
+                if(index ~ /^[0-9]+/) {
+                  allListLines(next, (FormattedBlock(emptyAnnot, Indent(indentLevel), 
+                  FormattedBlock(emptyAnnot, OrderedElt(index), block)))::lines)
+                }
+                else {
+                  allListLines(next, (FormattedBlock(emptyAnnot, Indent(indentLevel), 
+                  FormattedBlock(emptyAnnot, UnorderedElt(index), block)))::lines)
+                }
+              case _ -> eblock
+            }
+        }
+    }
+  }
+  
+  allListLines(text, [])
+}
+
+sig makeBlockQuote : (NativeString) -> (ParseResult, NativeString)
+fun makeBlockQuote(text) server {
+  fun allQuoteLines(text, lines) {
+    var bql = (text ~ /^({"\n"} *>(.*)){"\n"}/nl);
+    switch (bql) {
+      case [] -> 
+        switch(lines) {
+          case [] -> (None, text)
+          case _  -> 
+            (Some(CompoundBlock(emptyAnnot, [WordBlock(emptyAnnot, "\n"),
+            FormattedBlock(emptyAnnot, BlockQuote, CompoundBlock(emptyAnnot, reverse(lines)))])), 
+            (text ~ s/^{"\n"}//n))
+        }
+        case hd::notNl::line::_ ->
+          #push new line back there to continue block quote
+          var next = (text ~ s/^{notNl}//nl); 
+          allQuoteLines(next, (WordBlock(emptyAnnot, line ++ "\n"))::lines)
+    }
+  }
+  allQuoteLines(text, [])    
+}
+
+
+sig textToBlock : (NativeString) -> (ParseResult, NativeString)
+fun textToBlock(text) server {
+  fun tryAllParsers(parsers, text) {
+    switch(parsers) {
+      case [] -> (None, text)
+      case p::tl -> 
+        var z = p(text);
+        switch(z) {
+          case (None, t) -> tryAllParsers(tl, text)               
+          case _ -> z 
+        }
+    }    
+  }
+  
+  fun t2b(text:NativeString, bs : [Document]) {
+    var parsers = ([makeBlockQuote, makeList, makeSentenceBlock, 
+      eatWhitespace, makeFormattedBlock, makeHref, makeImageLink]: [((NativeString) -> (ParseResult, NativeString))]);
+      
+    if(text == (emptyString())) {
+      switch (bs) {
+        case [] ->  (Some(EmptyBlock), (emptyString()) )
+        case [singleton] -> (Some(singleton), (emptyString()))
+        case _  ->  (Some(CompoundBlock(emptyAnnot, reverse(bs))), (emptyString())) 
+      }
+    }
+    else {
+      var zz  = tryAllParsers(parsers, text);
+      switch(zz) {
+        case (res, txt) ->
+          switch (res) {
+            case (Some(block)) -> 
+              t2b(txt, block::bs)
+            case Error(_) ->
+              (res, txt)
+            case None -> 
+              if(txt == (emptyString())) {
+                t2b((emptyString()), EmptyBlock::bs)
+              }
+              else {
+                var s = from_native_string(txt);
+                #TBD ... coalesce adjacent small words... 
+                #some junk in the way; remove it and move ahead                
+                switch(s) {
+                  case hd::tl -> 
+                    t2b(to_native_string(tl), (WordBlock(emptyAnnot, [hd])::bs))
+                }
+              }
+          }
+      }
+    }         
+  }
+  
+  t2b(text, []) : (ParseResult, NativeString)
+}
+
+sig parseWikiBody : (String) -> Document
+fun parseWikiBody(t) server {
+  var b = textToBlock(to_native_string(t));
+  switch(b) {
+    case (Some(bb), t) -> bb
+    case (_, t) -> EmptyBlock
+  }
+}
+#--------------------END WIKI FORMATTING FUNCTIONS--------------------
+
+# debugging function
+sig getBlockType : (Document) -> String
+fun getBlockType(b) {
+  switch (b) {
+    case EmptyBlock -> "EmptyBlock"
+    case RestrictedBlock(_) -> "RestrictedBlock"
+    case WordBlock(_,_) -> "WordBlock"
+    case FormattedBlock(_,_,_) -> "FormattedBlock"
+    case CompoundBlock(_,_) -> "CompoundBlock"
+    case UnlabeledBlock (_,_,_) -> "UnlabeledBlock"
+    case LabeledBlock (_) -> "LabeledBlock"
+    case _ -> "Unknown Block"
+  }
+}
+
+
+sig blockToString : (Document) -> String
+fun blockToString(b) {
+  fun b2s(n)(b) {
+    var indent = 2;
+    fun bprint(s) { replicate(n,' ')++s++"\n"}
+
+    switch (b:Document) {
+      case EmptyBlock -> bprint("[]")
+      case RestrictedBlock(_) -> bprint("[Restricted]")
+      case WordBlock(_,w) -> bprint("["++w++"]")
+      case FormattedBlock(_,_,b) -> 
+        bprint("Formatted") ++ b2s(n+indent)(b)
+      case CompoundBlock(_,bs) -> 
+        bprint("Compound") ++ concat(map(b2s(n+indent), bs))
+      case UnlabeledBlock (x) ->
+        unpack x as (_, l, b);
+        bprint("Unlabeled: " ++ labelToString(l)) ++ b2s(n+indent)(b)
+      case LabeledBlock (x) ->
+        unpack x as (_, l, b_l);
+        var b = unlabel(b_l);
+        bprint("Labeled: " ++ labelToString(l)) ++ b2s(n+indent)(b)
+      case _ -> bprint("[?]")
+    }      
+  }
+  "*** Debug Block ***\n" ++ b2s(0)(b)
+}
+
+
+#++++++++++++++++++++RECOVER RAW WIKI TEXT FROM A Document++++++++++++++++++++
+fun documentToText(b)  { 
+  # t is the string so far
+  fun blockToText(t:String, b:Document) {
+    switch(b) {
+      case EmptyBlock ->  t
+      case RestrictedBlock(_) -> t
+      case LabeledBlock(_) -> 
+        error("Cannot parse LabeledBlock (should have been unlabeled before now)")
+      case WordBlock(_, w) -> t ++ w
+      case FormattedBlock(_, tag, fb) -> 
+        formatBlockToText(tag, fb,t)
+      case CompoundBlock(ig, bs) -> #fold_left causes firefox to crash :(
+        switch(bs) {
+          case [] -> t
+          case hd::tl -> 
+            blockToText(blockToText(t, hd), CompoundBlock(ig, tl))
+        }
+      case UnlabeledBlock(_, _, lb) -> 
+        blockToText(t,lb)
+    }
+  }
+  
+  fun formatBlockToText(tag : FormatType, fb : Document, t : String) {
+    fun ntimes(n, s) { #fix: not tail recursive
+      switch (n) {
+        case 0 ->  ""
+        case 1 -> s
+        case _ -> s ++ ntimes((n-1), s)
+      }
+    }
+    
+    fun listToText(lbs:[Document], t:String) {
+      switch(lbs) {
+        case [] -> t
+        case FormattedBlock(_, Indent(i), FormattedBlock(_, pfxElt, listelt))::tl ->
+          var pfx = switch(pfxElt) {
+            case OrderedElt(pfx) -> pfx ++ " "
+            case UnorderedElt(pfx) -> pfx ++ " "
+            case _ -> t ++ "Error : Impossible"
+          };
+          listToText(tl, blockToText((t ++ ntimes(i, "    ") ++ pfx), listelt))
+        case _ -> t ++ "Error: Unexpected list element"
+      }
+    }
+    
+    fun blockQuoteToText(bqs, t) {
+      switch(bqs) {
+        case [] -> t
+        case WordBlock(emptyAnnot, txt)::tl -> 
+          blockQuoteToText(tl, (t ++ ">" ++ txt))
+        case _ -> t ++ "Error: Unexpected block quote element"
+      }
+    }
+    
+    switch(tag) {
+      case Bold -> t++("**" ++ blockToText("", fb) ++ "**")
+      case Emph -> t++("*" ++ blockToText("", fb) ++ "*")
+      case Sub -> t++("~" ++ blockToText("", fb) ++ "~")
+      case Sup -> t++("^" ++ blockToText("", fb) ++ "^")
+      case Del -> t++("--" ++ blockToText("", fb) ++ "--")
+      case Hdr1 -> t++("#" ++ blockToText("", fb) ++ "#")
+      case Hdr2 -> t++("##" ++ blockToText("", fb) ++ "##")
+      case WikiLink -> t++("[[" ++ blockToText("", fb) ++ "]]")
+      case Link(s) -> t++("["++blockToText("", fb)++"] ("++s++")")
+      case ImageLink(s) -> t++("!["++blockToText("", fb)++"] ("++s++")")
+      case WS(_) -> blockToText(t, fb)
+      case List -> 
+        switch (fb) {
+          case CompoundBlock(_, lbs) -> listToText(lbs,t)
+          case _ -> listToText([fb], t)
+        }            
+      case BlockQuote -> 
+        switch (fb) {
+          case CompoundBlock(emptyAnnot, bqs) -> 
+            blockQuoteToText(bqs, t)
+          case _ -> blockQuoteToText([fb], t)
+        }
+      case _ -> t ++ "ERROR: IMPOSSIBLE!"
+    }
+  }
+
+  blockToText("", b)
+}
+
+# this is just used by ImageLink/WikiLink
+fun blockToText(b:Document) {
+  switch(b) {
+    case WordBlock(_, w) -> w
+    case _ -> ""
+  }
+}
+
+#++++++++++++++++++++CONVERT A Document INTO HTML++++++++++++++++++++
+#This runs on the client now; but the latest Links compiler supports
+#XML serialization. See if we can get this to run on the server too
+sig docToHtml : (Document, (String) -> Xml) -> Xml
+fun docToHtml(b, mkWikiLink)   {
+    
+  fun makeRestricted(text) { 
+    <span class="restricted">{stringToXml(text)}</span> 
+  }
+
+  fun appendBlockToHtml(b:Document, xml) {
+    switch(b) {
+      case EmptyBlock -> xml
+      case RestrictedBlock(error) -> 
+        xml ++ makeRestricted("** "++error++" **")
+      case LabeledBlock(_) -> 
+        error("Cannot parse LabeledBlock (should have been unlabeled by now)")
+      case WordBlock(_, w) -> 
+        # span added for BEEP
+        (xml ++ <span class="noexecute">{stringToXml(w)}</span>)
+      case CompoundBlock(ig, bs) ->
+        switch(bs) {
+          case [] -> xml
+          case hd::tl -> 
+            appendBlockToHtml(CompoundBlock(ig, tl), appendBlockToHtml(hd, xml))
+        }
+      case FormattedBlock(_, tag, fb) ->
+        xml ++ formattedBlockToHtml(tag, fb) 
+      case UnlabeledBlock(_, _, lb) ->
+        # UnlabeledBlock is now pruned before reaching client
+        appendBlockToHtml(lb, xml)
+    }
+  }
+  fun blockToHtml(b:Document) {
+    appendBlockToHtml(b, emptyXmlString)
+  }
+
+  fun wikiLinkToHtml(wikiLink:Document) {
+    var wikiTitle = blockToText(wikiLink);
+    mkWikiLink(wikiTitle)
+  }
+
+  fun formattedBlockToHtml(tag, b) {
+    switch(tag) {
+      case WikiLink -> wikiLinkToHtml(b)
+      case Bold -> <strong> {blockToHtml(b)} </strong>
+      case Emph -> <em> {blockToHtml(b)} </em>
+      case Sub -> <sub> {blockToHtml(b)} </sub>
+      case Sup -> <sup> {blockToHtml(b)} </sup>
+      case Del -> <del> {blockToHtml(b)} </del>
+      case Hdr1 -> <h1> {blockToHtml(b)} </h1>
+      case Hdr2 -> <h2> {blockToHtml(b)} </h2>
+      case WS(HLine) -> <hr/>
+      case WS(Para) -> <p/>
+      case Link(url) -> <a href="{url}">{blockToHtml(b)}</a>
+      case ImageLink(url) -> 
+        <img src="{url}" alt="{blockToText(b)}"/>
+      case List ->
+        var bs = switch (b) {
+          case CompoundBlock(_, bs) -> bs
+          case _ -> [b]
+        };
+        var lbres = listbodyToHtml(-1, bs, emptyXmlString);
+        switch (lbres) {
+          case ([], lxml) -> lxml
+          case (_, lxml) -> lxml ++ <listerror/>
+        }
+      case BlockQuote ->     <pre>{blockToHtml(b)}</pre>
+      case _ -> emptyXmlString
+    }
+  }
+
+  fun listbodyToHtml(il:Int, lb:[Document], xml : Xml) {
+    switch(lb) {
+      case [] ->  ([], xml)
+      case FormattedBlock(_, Indent(ill), FormattedBlock(_, tag, body))::tl ->
+        if(ill < il) {
+          (lb, xml)
+        }
+        else if (il == ill) {
+          var nextXml = xml ++ (<li> {blockToHtml(body)} </li>);
+          listbodyToHtml(il, tl, nextXml)
+        }
+        else {
+          var inner = listbodyToHtml(ill, lb, emptyXmlString);
+          switch (inner) {
+            case (outerTail, innerListXml) ->
+              var nextXml = 
+              switch(tag) {
+                case OrderedElt(_) -> xml ++ (<ol> {innerListXml} </ol>)
+                case UnorderedElt(_) -> xml ++ (<ul> {innerListXml} </ul>)
+                case _ -> <impossible />
+              };
+              listbodyToHtml(il, outerTail, nextXml)
+          }
+        }
+      case _ -> (lb, <impossible/>)
+    }
+  }
+
+  blockToHtml(b)
+}
+
+################################################################################
+# Labeling formlet stuff
+################################################################################
+
+
+sig listify : (String) -> ([String], String)
+fun listify(text) server {
+  fun listify_(text, currentWord, words) {
+    switch(text) {
+      case [] -> 
+        (reverse(words), reverse(currentWord))
+      case ' '::tl -> 
+        var next = (text ~ s/^ *//);
+        listify_(next, "", (reverse(currentWord)::words))
+      case hd::tl ->
+        listify_(tl, (hd::currentWord), words)
+    }
+  }
+  
+  listify_(text : [Char], [] : [Char], [] : [String])
+}
+
+sig makeGroups : ([(String, Bool)]) -> [String]
+fun makeGroups(splitters)  {
+  fun stringify (group) {
+    fold_left ((fun (s, w) { 
+      switch(s) {
+        case [] -> w
+        case _ -> s ++ " " ++ w
+      }
+    }), "", (reverse(group)))
+  }    
+  
+  fun makeGroups_(splitters, currentGroup, groups) {
+    switch(splitters) {
+      case [] -> reverse ((stringify (currentGroup))::groups)
+      case (word, false)::tl -> makeGroups_ (tl, (word::currentGroup), groups)
+      case (word, true)::tl -> debug("Found selected check box!"); makeGroups_ (tl, [], (stringify(word::currentGroup))::groups)
+    }
+  }
+  makeGroups_(splitters, [], [])
+}
+
+sig formatDoclet : (FormatType, Formlet(Document)) -> (Formlet(Document))
+fun formatDoclet(ftype, b) {
+  switch(ftype) {
+    case Bold -> formlet <strong> {b -> d} </strong> yields d
+    case Emph -> formlet <em> {b -> d} </em> yields d
+    case Sub -> formlet <sub> {b -> d} </sub> yields d
+    case Sup -> formlet <sup> {b -> d} </sup> yields d
+    case Del -> formlet <del> {b -> d} </del> yields d
+    case Hdr1 -> formlet <h1>  {b -> d} </h1> yields d
+    case Hdr2 -> formlet <h2>  {b -> d} </h2> yields d
+    case WS(HLine) -> formlet <#><hr/> {b -> d}</#> yields d
+    case Link(url) -> formlet <a href="url"> {b -> d} </a> yields d
+    case ImageLink(url) -> formlet <img src="{url}"> {b -> d} </img> yields d
+    case _ -> b
+  }
+}
+
+sig mapDocument : ((Document) -> Document) ->  (Document) -> Document
+fun mapDocument(f)(doc) {
+  switch(doc) {
+    case UnlabeledBlock(a, l, child) -> 
+      f(UnlabeledBlock(a, l, mapDocument(f)(child)))
+    case FormattedBlock(a, ft, child) -> 
+      f(FormattedBlock(a, ft, mapDocument(f)(child)))
+    case CompoundBlock(a, children) -> 
+      f(CompoundBlock(a, map(mapDocument(f),children)))
+    case _ -> f(doc)
+  }
+}
+
+# first fold children, then main document
+sig foldDocument : ((a,Document) -> a, a, Document) -> a
+fun foldDocument(f, acc, doc) {
+  var acc = 
+  switch(doc) {
+    case UnlabeledBlock(_,_,child) -> foldDocument(f, acc, child)
+    case FormattedBlock(_,_,child) -> foldDocument(f, acc, child)
+    case CompoundBlock(_, children) -> 
+      fun fd (acc, ch) { foldDocument(f, acc, ch) }
+      fold_left(fd, acc, children)
+    case _ -> acc
+  };
+  f(acc,doc)
+}
+
+
+sig pruneLabeledDocument : (Document) -> Document
+fun pruneLabeledDocument(doc) {
+  switch (doc) {
+    case LabeledBlock (x) ->
+      unpack x as (a, l, b_l);
+      var b = unlabel(b_l);
+      var b = pruneLabeledDocument(b);
+      if (b == EmptyBlock) EmptyBlock
+      else {
+        LabeledBlock (a, l, relabel(b,l))
+      }
+    case FormattedBlock(a, ft, b) -> 
+      var b = pruneLabeledDocument(b);
+      if (b == EmptyBlock) EmptyBlock
+      else FormattedBlock(a, ft, b)
+    case UnlabeledBlock(a, l, b) ->
+      var b = pruneLabeledDocument(b);
+      if (b == EmptyBlock) EmptyBlock
+      else UnlabeledBlock(a, l, b)
+    case CompoundBlock(a, bs) -> 
+      var bs = map(pruneLabeledDocument, bs);
+      var bs = filter(fun (b) { b<>EmptyBlock }, bs);
+      if (bs == []) EmptyBlock
+      else CompoundBlock(a, bs)
+    case _ -> doc
+  }
+}
+
+# this does not prune within LabeledBlocks
+sig pruneDocument : (Document) -> Document
+fun pruneDocument(doc) {
+  switch (doc) {
+    case FormattedBlock(a, ft, b) -> 
+      var b = pruneDocument(b);
+      if (b == EmptyBlock) EmptyBlock
+      else FormattedBlock(a, ft, b)
+    case UnlabeledBlock(a, l, b) ->
+      var b = pruneDocument(b);
+      if (b == EmptyBlock) EmptyBlock
+      else UnlabeledBlock(a, l, b)
+    case CompoundBlock(a, bs) -> 
+      var bs = map(pruneDocument, bs);
+      var bs = filter(fun (b) { b<>EmptyBlock }, bs);
+      if (bs == []) EmptyBlock
+      else CompoundBlock(a, bs)
+    case _ -> doc
+  }
+}
+
+fun existingNode(b) {
+  switch(getNodeId(b)) { 
+    case NewNode -> false
+    case NodeId(_) -> true
+  }
+}
+
+sig setDocAnnotation : (Document, DocAnnotation) -> Document
+fun setDocAnnotation(b, a) {
+  switch (b) {
+    case WordBlock(_,w) -> WordBlock(a,w)
+    case FormattedBlock(_,fts,b) -> FormattedBlock(a,fts,b)
+    case UnlabeledBlock(_,l,b) -> UnlabeledBlock(a,l,b)
+    case CompoundBlock(_,bs) -> CompoundBlock(a,bs)
+    case LabeledBlock (x) ->
+      unpack x as (_, l, b_l);
+      LabeledBlock (a, l, b_l)
+    case _ -> b
+  }
+}
+
+
+sig getDocAnnotation : (Document) -> Maybe(DocAnnotation)
+fun getDocAnnotation(b) {
+  switch (b) {
+    case WordBlock(a,_) -> Just(a)
+    case FormattedBlock(a,_,_) -> Just(a)
+    case UnlabeledBlock(a,_,_) -> Just(a)
+    case CompoundBlock(a, _) -> Just(a)
+    case LabeledBlock (x) -> 
+      unpack x as (a,_,_);
+      Just (a)
+    case _ -> Nothing
+  }
+}
+
+sig getNodeId : (Document) -> NodeIdentifier
+fun getNodeId(b) {
+  switch (getDocAnnotation(b)) {
+    case Just(a) -> a.node
+    case Nothing -> NewNode
+  }
+}
+
+sig setNodeId : (Document, NodeIdentifier) -> Document
+fun setNodeId(b, nid) {
+  switch (getDocAnnotation(b)) {
+    case Nothing -> b
+    case Just(a) -> setDocAnnotation(b, (a with node = nid))
+  }
+}
+
+sig blockEq : (Document, Document) -> Bool
+fun blockEq(x,y) { 
+  debug("*** Calling blockEq");
+  var sameNodeId = 
+  switch ((getNodeId(x),getNodeId(y))) {
+    case (NodeId(xn),NodeId(yn)) -> xn == yn
+    case _ -> 
+      debug("*** NodeIds differ");
+      false
+  };
+  switch((x,y)) {
+    case (WordBlock(_, x_text),WordBlock(_,y_text)) -> 
+      debug("*** WordBlocks");
+      sameNodeId && x_text == y_text
+    case (FormattedBlock(_,x_ft,_),FormattedBlock(_,y_ft,_)) -> 
+      debug("*** FormattedBlocks");
+      sameNodeId && x_ft == y_ft
+    case (UnlabeledBlock(_,x_l,_),UnlabeledBlock(_,y_l,_)) ->
+      debug("*** UnlabeledBlocks");
+      sameNodeId && x_l == y_l
+    case (CompoundBlock(_,xbs),CompoundBlock(_,ybs)) -> 
+      debug("*** CompoundBlocks");
+      # the number of existing nodes should be the same
+      var ybs = filter(existingNode, ybs);
+      sameNodeId && length(xbs) == length(ybs)
+
+    case (_,RestrictedBlock(_)) -> 
+      debug("*** RestrictedBlock");
+      true
+    case _ -> 
+      debug("*** Other blocks");
+      false
+  }
+}
+
+# assumes newDoc is OK
+fun mkLabeledBlock(a,l)(b_l) { OK(LabeledBlock(a,l,b_l)) }
+fun mkUnlabeledBlock(a,l)(b) { OK(UnlabeledBlock(a,l,b)) }
+fun mkFormattedBlock(a,ft)(b) { OK(FormattedBlock(a,ft,b)) }
+fun mkCompoundBlock(a)(bs) { OK(CompoundBlock(a,bs)) }
+# all "public" functions from this file begin with "db"
+# This is the database interface for the CPA. 
+# It has no concept of Labels; it merely deals with accessing the database. 
+
+# wrap an operation in a transaction, using the current database
+# sig dbTransaction : (() -> Checked (a)) -> Checked (a)
+# var dbTransaction = doTransaction(cpadb);
+
+fun dbloadDocument(pageid) server {
+  var roots = 
+  for (var block <-- page_blocks) 
+    where ((block.pageid == pageid) && 
+    (block.parentblockid == block.blockid))
+    [block];
+    
+  switch(roots) {
+    case root::_ -> 
+      dbloadBlock(root.blockid)
+    case [] -> 
+      dbdeleteWikiPage(pageid);
+      error(
+        "Page "++intToString(pageid)
+        ++ " was defined, but no page blocks"
+      )
+  }
+}
+
+# Construct a document by reading from the page tables
+# Arguments: 
+#   pageid: the pageid of the root of the document
+# Returns: Document
+# Note: There is no filtering done on labels at this time; instead,
+#       the whole document is returned and filtered later
+sig dbloadBlock : (Int) -> Document
+fun dbloadBlock(blockid) server {
+  
+  # Get the FormatType of a particular block
+  fun getFormatType(blockid) {
+    #HACK -- pickling labels is very brittle wrt compiler changes
+    fun unpickle_formattype (p) { 
+      unpickle_value(p)
+    }
+    
+    var ft = 
+    for(var bf <-- block_format) 
+      where (bf.blockid == blockid)
+      [bf];
+      
+    switch(ft) {
+      case [singleton] ->
+        (unpickle_formattype(singleton.formattag) : FormatType)
+      case _ -> (WS(EOF) : FormatType)
+    }
+  }
+  
+  fun getBlockLabels(blockid)  {
+    var slabels = 
+    for(var bl <-- block_label)
+      where (bl.blockid == blockid)
+      [bl.label];
+    
+    var res : Label is lab = 
+    switch (slabels) {
+      case sl::_ -> stringToLabel(sl)
+      case [] -> defaultLabel
+    };
+
+    res
+  }
+
+  # Convert block to a Document
+  # Args:
+  #   block : a page_block TableHandle to convert
+  #   kids : The already-instantiated children
+  fun blockToDoc(block, kids:[BlockType('a)]) {
+    var result : Document = 
+    switch(block.blocktype) {
+      case "word" ->
+          WordBlock((emptyAnnot with node=NodeId(block.blockid)), block.text)
+      case "formatted" -> 
+        switch(kids) {
+          case [singleton] -> 
+            FormattedBlock(
+              (emptyAnnot with node=NodeId(block.blockid)),
+              getFormatType(block.blockid), 
+              singleton
+            )
+          case [] ->
+            RestrictedBlock("blockToDoc: FormattedBlock without child!")
+          case _ ->
+            RestrictedBlock("blockToDoc: FormattedBlock with multiple children!")
+        }
+      case "compound" ->
+        switch(kids) {
+          case [] ->
+            RestrictedBlock("blockToDoc: CompoundBlock without children!")
+          case _ ->
+            CompoundBlock((emptyAnnot with node=NodeId(block.blockid)), kids)
+        }
+      case "labeled" -> 
+        switch(kids) {
+          case [singleton] -> 
+	    var annot = (emptyAnnot with node=NodeId(block.blockid));
+	    var l = getBlockLabels(block.blockid);
+# 	    var tuple = pack (annot, label, relabel(singleton, label)) as (DocAnnotation, l<-Label is lab, Document{l});
+            LabeledBlock(annot, l, relabel(singleton, l))
+          case [] -> 
+            RestrictedBlock("blockToDoc: LabeledBlock without child!")
+          case _ -> 
+            RestrictedBlock("blockToDoc: LabeledBlock with multiple children!")
+        }
+      case _ -> RestrictedBlock("blockToDoc: Unknown blocktype!")
+    };
+    result
+  }
+
+  # Recursively get the subtree rooted at parentid
+  fun getSubtree(parentid) {
+    var blocks = 
+    for (var block <-- page_blocks) 
+      where ((block.parentblockid == parentid) && 
+      (block.blockid <> block.parentblockid))
+      orderby (block.sibling) 
+      [block];
+      
+    for (var block <- blocks)
+      [ blockToDoc(block, getSubtree(block.blockid)) ]
+  }          
+
+  var roots = 
+  for (var block <-- page_blocks) 
+    where (block.blockid == blockid)
+    [block];
+    
+  switch(roots) {
+    case root::_ -> 
+      blockToDoc(root, getSubtree(root.blockid))
+    case [] -> 
+      error(
+        "Block "++intToString(blockid)
+        ++ " not defined"
+      )
+  }
+}
+
+  
+  
+# Load the specified page from the database
+sig dbloadWikiPage : (Int) -> WikiPage 
+fun dbloadWikiPage(pageid) server {
+  
+  var pgs = for (var page <-- pages) 
+             where (page.pageid == pageid)
+               [page];
+  var page = switch (pgs) {
+    case pg::_ -> pg
+    case [] -> 
+      error("Page "++intToString(pageid)++" does not exist in database!")
+  };
+
+  var doc = dbloadDocument(pageid);
+  
+  ( emptyPage with 
+    pageid = NodeId(pageid), 
+    title = page.title,
+    body = doc
+  )
+}
+
+
+#XXX: race condition: 
+# this merely returns current last value; it does not increment
+# so there is no guarantee that the next page added with have this pageid.
+#
+# one solution would be to hack links to add nextval() call, 
+# which does an atomic fetch and add.
+sig getSequenceId : (String) -> Int
+fun getSequenceId (seq) {
+  var id_sequence = table seq with (
+    last_value : Int
+  ) from cpadb;
+  
+  hd(for (var id <-- id_sequence) [id.last_value])
+}
+
+fun deleteByPageId(table_name, pageid) {
+  var tab = table table_name with (pageid : Int) from cpadb;
+  delete (var r <-- tab) 
+  where (r.pageid == pageid)
+}
+
+# delete all page info, but not the page itself
+# this may fail if we do not have write access for any label
+sig dbclearWikiPage : (Int) -> ()
+fun dbclearWikiPage(pageid) server {
+  deleteByPageId("block_label", pageid);
+  deleteByPageId("block_format", pageid);
+  deleteByPageId("page_blocks", pageid);
+  ()
+}
+
+# delete all information about the page
+sig dbdeleteWikiPage : (Int) -> ()
+fun dbdeleteWikiPage(pageid) server {
+  dbclearWikiPage(pageid);
+  deleteByPageId("pages", pageid);
+  ()
+}
+
+sig dbdeleteBlock : (Int) -> ()
+fun dbdeleteBlock(blockId) {
+  var childIds = 
+  for (var r <-- page_blocks) 
+    where (r.parentblockid == blockId && r.blockid <> blockId)
+    [r.blockid];
+    
+  iter(dbdeleteBlock, childIds);
+  
+  delete (var r <-- block_label) where (r.blockid == blockId);
+  delete (var r <-- block_format) where (r.blockid == blockId);
+  delete (var r <-- page_blocks)  where (r.blockid == blockId);
+}
+
+fun dbGetPageList() server {
+  var pageList = 
+  for (var page <-- pages)
+    orderby (page.title)
+    [(pageid = intToString(page.pageid), title = page.title)];
+#     for (var block <-- page_blocks)
+#       where (page.pageid == block.pageid)
+#       for (var label <-- block_label)
+#         where (label.blockid == block.blockid)
+#         for (var xref <-- tag_user_xref)
+#           where (xref.tagid == label.tagid && xref.userid == userid)
+#             [(pageid = intToString(page.pageid), title = page.title)];
+          
+  nubByGrouped(
+    fun (x,y) { x.pageid == y.pageid },
+    pageList
+  )
+}
+
+# Need to update to handle Labeled document 
+# rather than Unlabeled documents
+sig dbpersistDocument : (Int, WikiPage) -> Int
+fun dbpersistDocument(userid, page) server {
+  #debug("*** Persisting page");
+  var pageid = switch(page.pageid) {
+    case NodeId(id) -> 
+      #debug("*** Existing node "++intToString(id));
+      ## clear all current data associated with page
+      #dbclearWikiPage(id);
+      id
+    case NewNode -> 
+      #debug("*** New node");
+      # This always succeeds because there are not labels on pages,
+      # so a new page is always OK
+      insert pages values [(creator=userid, title=page.title)];
+      #XXX: race condition: 
+      getSequenceId("pageid_sequence")
+  };
+  
+  # update does a delete and insert, rather than update... why?
+  fun updateLabels(l, blockid) {
+    delete (var bl <-- block_label) 
+    where ((bl.pageid==pageid) && (bl.blockid==blockid));
+    dbinsertLabels(l, pageid, blockid)
+  }
+  
+  #XXX: race condition
+  fun getLastBlockId () { getSequenceId ("blockid_sequence") }
+
+  fun insertNewNode(node, pidOpt, sib) {
+    debug("dbpersistDocument: New node: calling insertNewNode");
+    dbinsertNewNode(userid, pageid, node, pidOpt, sib)
+  }
+
+  fun maybeUpdateBlock(blockid, text, pidOpt, sib) {
+    debug("dbpersistDocument: Existing node "++intToString(blockid)++": calling maybeUpdateBlock");
+    dbmaybeUpdateBlock(userid, pageid, blockid, text, pidOpt, sib)
+  }
+
+  # recursively update document in database
+  fun updateDocument((pidOpt, sib:Int), doc : Document) {
+    debug("*** Inserting node of type "++getBlockType(doc));
+    switch(doc) {
+      case CompoundBlock(a, children) -> 
+        switch(a.node) {
+          case NewNode -> 
+            var _ = fold_left(updateDocument, (insertNewNode(doc, pidOpt, sib), 0), children);
+            (pidOpt, sib+1)
+          case NodeId(id) -> 
+            maybeUpdateBlock(id, "", pidOpt, sib);
+            var _ = fold_left (updateDocument, (Just(id), 0), children);
+            (pidOpt, sib+1)
+        }
+      case LabeledBlock (x) ->
+        unpack x as (a, l, child_l);
+        var child = unlabel(child_l);
+        switch(a.node) {
+          case NewNode -> 
+            var _ = updateDocument((insertNewNode(doc, pidOpt, sib), 0), child); 
+            (pidOpt, sib+1)
+          case NodeId(id) -> 
+            maybeUpdateBlock(id, "", pidOpt, sib);
+            updateLabels(l, id);
+            var _ = updateDocument((Just(id), 0), child); 
+            (pidOpt, sib+1)
+        }
+      case FormattedBlock(a, ftype, child) -> 
+        switch(a.node) {
+          case NewNode -> 
+            var _ = 
+            updateDocument((insertNewNode(doc, pidOpt, sib), 0), child); 
+            (pidOpt, sib+1)
+          case NodeId(id) -> 
+            maybeUpdateBlock(id, "", pidOpt, sib);
+            var _ = updateDocument((Just(id), 0), child); 
+            (pidOpt, sib+1)
+        }
+      case WordBlock(a, text) -> 
+        switch(a.node) {
+          case NewNode -> 
+            var _ = insertNewNode(doc, pidOpt, sib);
+            (pidOpt, sib+1)
+          case NodeId(id) -> 
+            maybeUpdateBlock(id, text, pidOpt, sib);
+            (pidOpt, sib+1)
+        }
+      case RestrictedBlock(msg) -> 
+        error("Cannot persist RestrictedBlock ("++msg++")")
+      case UnlabeledBlock(_,_,_) ->
+        error("Cannot persist UnlabeledBlock")
+      case _ -> (pidOpt, sib)
+    }
+  }
+  
+  var _ = updateDocument((Nothing, 0), page.body);
+  pageid
+}
+
+# persists block; all sub blocks are created as new
+sig dbpersistBlock : (Int, Int, Document, Maybe(Int), Int) -> ()
+fun dbpersistBlock(userid, pageid, block, pid, sib) server {
+  
+  #XXX: race condition
+  fun getLastBlockId () { getSequenceId ("blockid_sequence") }
+
+  fun insertNewNode(block, pidOpt, sib) {
+    #debug("dbpersistBlock: insertNewNode");
+    dbinsertNewNode(userid, pageid, block, pidOpt, sib)
+  }
+
+  # recursively update document in database
+  fun updateDocument((pid, sib), b) {
+    #debug("dbpersistBlock: updateDocument: inserting node of type "++getBlockType(b));
+    switch(b) {
+      case CompoundBlock(_, children) -> 
+        ignore(fold_left(updateDocument, (insertNewNode(b, pid, sib), 0), children))
+      case LabeledBlock (x) -> 
+        unpack x as (_, l, child_l);
+        var child = unlabel(child_l);
+        ignore(updateDocument((insertNewNode(b, pid, sib), 0), child))
+      case FormattedBlock(_, ftype, child) -> 
+        ignore(updateDocument((insertNewNode(b, pid, sib), 0), child))
+      case WordBlock(_, text) -> 
+        ignore(insertNewNode(b, pid, sib))
+      case EmptyBlock ->
+        var b = WordBlock(emptyAnnot, "");
+        ignore(insertNewNode(b, pid, sib))
+      case _ ->
+        error("Cannot persist "++getBlockType(b))
+    };
+    (pid, sib+1)
+  }
+  ignore(updateDocument((pid, sib), block))
+}
+
+
+# sig insertItem : ([a], Int, a) -> [a]
+# fun insertItem(xs, n, y) {
+#   if (n==0) y::xs
+#   else switch (xs) {
+#     case x::xs -> x :: insertItem(xs,n-1,y)
+#     case [] -> [y]
+#   }
+# }
+
+# sig dbinsertChild : (Int, Document, Int, Document) -> ()
+# fun dbinsertChild(userid, parent, n, child) {
+#   switch (parent) {
+#     case CompoundBlock(a, bs) ->
+#       var bs = insertItem(bs,n,child);
+#       var b = CompoundBlock(a, bs);
+#       dbreplaceBlock(userid, parent, b)
+#     case _ -> 
+#       error("dbinsertChild: requires parent of type CompoundBlock, found " 
+#         ++ getBlockType(parent));
+#   }
+# }
+
+# # sig dbinsertWikiPage : (Int, WikiPage) -> ()
+# # fun dbinsertWikiPage(userid, wikiPage) server {
+# #   var pageid = 
+# #   switch (wikiPage.pageid) {
+# #     case NodeId(pageid) -> 
+# #       dbclearWikiPage(pageid);
+# #       pageid
+# #     case NewNode ->
+# #       # This always succeeds because there are not labels on pages,
+# #       # so a new page is always OK
+# #       insert pages values [(creator=userid, title=wikiPage.title)];
+# #       #XXX: race condition: 
+# #       getSequenceId("pageid_sequence")
+# #   };
+# #   var wikiPage = (wikiPage with pageid = NodeId(pageid));
+# #   dbpersistDocument(userid, wikiPage)
+# # }
+
+fun dbinsertLabels(l, pageid, blockid) {
+  var val = (pageid=pageid, blockid=blockid, label=labelToString(l));
+  insert block_label values [val]
+}
+
+# this only works for an existing document!
+sig dbreplaceBlock : (Int, Document, Document) -> ()
+fun dbreplaceBlock(userid, old, new) {
+  var blockid = 
+  switch (getNodeId(old)) {
+    case NodeId(id) -> id
+    case NewNode -> error("dbreplaceBlock: Cannot replace non-existent block")
+  };
+
+  # get parent, sib
+  var bs =
+  for (var b <-- page_blocks)
+    where (b.blockid == blockid)
+    [b];
+    
+  var (pageid,parentid,sib) =
+  switch (bs) {
+    case b::_ -> (b.pageid,b.parentblockid,b.sibling)
+    case _ -> error("dbreplaceBlock: Block ID not found")
+  };
+
+  debug(
+    "dbreplaceBlock: "
+    ++ "pageid = " ++ intToString(pageid) 
+    ++ ", blockid = " ++ intToString(blockid)
+    ++ ", parentblock id = " ++ intToString(parentid)
+  );
+  dbdeleteBlock(blockid);
+  var parentid = 
+  if (parentid==blockid) Nothing else Just(parentid);
+  dbpersistBlock(userid, pageid, new, parentid, sib)
+}
+
+# currently just used by dbreplaceBlock
+fun dbinsertNewNode(userid, pageid, node, pidOpt, sib) {
+  
+  fun getLastBlockId () { getSequenceId ("blockid_sequence") }
+  var parentid = 
+  switch(pidOpt) {
+    #XXX: hack
+    # if there is no parent, the parentid must be the same as the 
+    # current block, which will be the current block ID + 1
+    case Nothing -> getLastBlockId () + 1
+    case Just(parentid) -> parentid
+  };
+  var emptyPageBlock = (
+    pageid=pageid, 
+    parentblockid=parentid, 
+    blocktype="invalid", 
+    text="", 
+    sibling=sib
+  );
+  switch(node:Document) {
+    case WordBlock(_, text) -> 
+      insert page_blocks values [(
+        emptyPageBlock with blocktype="word", text=text
+      )]; 
+      Just(getLastBlockId ())
+    case FormattedBlock(_, tag, _) ->
+      insert page_blocks values [(
+        emptyPageBlock with blocktype="formatted"
+      )];
+      var thisBlockId = getLastBlockId ();
+      insert block_format values[(
+        pageid=pageid,
+        blockid=thisBlockId,
+        formattag=pickle_value(tag),
+        userid=userid
+      )];
+      Just(thisBlockId)
+    case CompoundBlock(_, _) ->
+      insert page_blocks values [(
+        emptyPageBlock with blocktype="compound"
+      )];
+      Just(getLastBlockId ())
+    case LabeledBlock (x) ->
+      unpack x as (_, l, _);
+      insert page_blocks values [(
+        emptyPageBlock with blocktype="labeled"
+      )];
+      var thisBlockId = getLastBlockId ();
+      dbinsertLabels(l, pageid, thisBlockId);
+      Just(thisBlockId)
+    case RestrictedBlock(msg) -> 
+      error("Cannot insert RestrictedBlock ("++msg++")")
+    case _ -> 
+      error("Cannot insert " ++ getBlockType(node))
+  }
+}
+
+fun dbmaybeUpdateBlock(userid, pageid, blockid, text, pidOpt, sib) {
+  var parentid = 
+  switch(pidOpt) {
+    case Nothing -> blockid
+    case Just(parentid) ->  parentid
+  };
+
+  update (var pb <-- page_blocks)
+  where ((pb.pageid == pageid) && (pb.blockid == blockid))
+  set (
+    pageid=pageid, 
+    parentblockid=parentid, 
+    blocktype=pb.blocktype, 
+    text=text, 
+    sibling=sib
+  )
+}
+
+# not sure where this should live, probably not DB
+sig dbgetAvailableLabels : () -> [Label is lab]
+fun dbgetAvailableLabels() {
+  var userTags:[String] = dbgetUserTags();
+  map(fun (t) { mkAclLabel([t],[]) }, userTags) 
+  ++ 
+  map(fun (t) { mkAclLabel([],[t]) }, userTags)
+}
+
+sig dbgetUserTags : () -> [String]
+fun dbgetUserTags() { 
+  for (var t <-- tags) {
+    [t.name]
+  }
+}
+
+sig dbgetPidsByTitle : (String) -> [Int]
+fun dbgetPidsByTitle(title) {
+  for (var p <-- pages) 
+    where (p.title == title)
+    [p.pageid]
+}
+### BLOCK POLICIES ###
+
+var defaultACLabel = Acl (
+  read=Cons(Authors,Cons(Guests,Nil)),
+  write=Cons(Authors,Nil)
+);
+
+sig getBlock : (Cred, WikiPage{PageLabel}, Path)
+-> Checked ((l<-Label is lab, Document{l}))
+fun getBlock(cred, page_, path) {
+  var page = unlabel(page_);
+  var l = 
+  switch (page.body) {
+    # label block's label also applies to block itself
+    case LabeledBlock (x) ->
+      unpack x as (_, l, _); l
+    case _ -> defaultACLabel
+  };
+  var b_l = relabel(page.body, l);
+  getChildBlock(cred, l, b_l, path)
+}
+
+sig getChildBlock : (Cred, l<-Label is lab, Document{l}, Path)
+-> Checked ((m<-Label is lab, Document{m}))
+fun getChildBlock(cred, l, b_l, p) policy {
+  fun pathError(b,p) {
+    var msg = "getChildBlock: Wrong block type: "++getBlockType(b)
+    ++", expected :"++pathToString(p);
+    throw(PathException(msg))
+  }
+  fun getChildBlock_(l2:Label is lab, p:Path)(b:Document) {
+    switch ((p,b)) {
+      case (Destination, _) -> 
+        var res = pack (l2, relabel(b,l2)) as (m<-Label is lab, Document{m});
+        OK (res)
+      case (Child (subpath), LabeledBlock (x)) ->
+        unpack x as (_, l3, b_l3);
+        getChildBlock(cred, l3, b_l3, subpath)
+      case (Child (subpath), FormattedBlock (_,_,b)) -> 
+        getChildBlock_(l2,subpath)(b)
+      case (ChildN(sib, subpath), CompoundBlock (_,bs)) ->
+        switch (nth(bs, sib)) {
+          case Just (b) -> getChildBlock_(l2,subpath)(b)
+          case Nothing -> pathError(b,p)
+        }
+      case _ -> pathError(b,p)
+    }
+  }
+  access(cred, l, b_l)
+  +>>= getChildBlock_(l, p)
+}
+
+sig loadPage : (Int) -> WikiPage{PageLabel}
+fun loadPage(pageid) {
+  relabel(dbloadWikiPage(pageid), PageLabel)
+}
+
+sig reloadPage : (WikiPage{PageLabel}) -> WikiPage{PageLabel}
+fun reloadPage(page_) {
+  var page = accessPage(page_);
+  loadLabeledPage(page)
+}
+
+sig loadLabeledPage : (WikiPage) -> WikiPage{PageLabel}
+fun loadLabeledPage(page) {
+  switch (page.pageid) {
+    case NodeId (pageid) -> loadPage(pageid)
+    case _ -> 
+      #FABLE if case is `NewNode', we get a fable compile error
+      error("loadLabeledPage: Cannot load non-existent page")
+  }
+}
+
+sig accessPage : phantom pl .(WikiPage{pl}) -> WikiPage
+fun accessPage(p) { unlabel(p) }
+
+sig applyWriteToBlock : (Cred, (Document) -> Checked (Document), Path)
+-> (WikiPage{PageLabel}) 
+-> Checked (WikiPage{PageLabel})
+fun applyWriteToBlock(cred, f, path)(p_) policy {
+  var (x) = catch(getBlock(cred, p_, path));
+  unpack x as (l,oldb_l);
+  var tmp = 
+  switch (applyWrite(cred, f, l, oldb_l)) {
+    case Exception (e) -> Exception (e)
+    case OK (newb_l) -> 
+      # actually replace blocks using db-level call
+      var newb = unlabel(newb_l);
+      var oldb = unlabel(oldb_l);
+      unpack cred as (label=q, name=n, userid=u);
+      var userid = unlabel(u);
+      OK (dbreplaceBlock(userid, oldb, newb))
+  };
+  # reload the page to return the most current version
+  tmp +>> OK (reloadPage(p_))
+}  
+
+
+sig deletePage : (Cred, WikiPage{PageLabel}) -> Checked(())
+fun deletePage(cred, p_) policy {
+  var dt = catch(getBlock(cred, p_, Destination));
+  unpack dt as (l,x_l);
+  accessForWriting(cred)(l,x_l)
+  +>>= fun (_) { 
+    var p = unlabel(p_);
+    switch (p) {
+      case ((pageid=NodeId(pageid)|p)) -> 
+        dbdeleteWikiPage(pageid) 
+      case _ -> ()
+    };
+    OK ()
+  }
+}
+
+# sig mergeLabeledBlocks : (Cred) -> (WikiPage{PageLabel}) 
+# -> Checked (WikiPage{PageLabel})
+# fun mergeLabeledBlocks(cred)(page_) {
+#   var page = unlabel(page_);
+#   fun mergeLabeled(b) {
+#     switch (b:Document) {
+#       case LabeledBlock (x1) ->
+#         unpack x1 as (a, l1, b1_l1);
+#         var b1 = unlabel(b1_l1);
+#         var b1 = mapDocument(mergeLabeled)(b1);
+#         switch (b1:Document) {
+#           case LabeledBlock (x2) ->
+#             unpack x2 as (_, l2, b2_l2);
+#             var l12:Label is lab = joinLabels(l1,l2);
+#             var b2:Document = unlabel(b2_l2);
+#             var b2_l12 = relabel(b2, l12);
+#             LabeledBlock (a, l12, b2_l12)
+#           case _ -> 
+#             LabeledBlock (a, l1, relabel(b1, l1))
+#         }
+#       case _ -> b
+#     }
+#   }
+#   var body = mapDocument(mergeLabeled)(page.body);
+#   # dbreplaceBlock requires a userid; arbitrarily using 1
+#   dbreplaceBlock(1, page.body, body);
+#   var page = (page with body=body);
+#   OK (relabel(page,PageLabel))
+# }
+
+# local function for createPage*; uses non-labeled WikiPages
+sig persistPage : (Cred, WikiPage) -> Checked(WikiPage{PageLabel})
+fun persistPage(cred, page) {
+  unpack cred as (label=l, name=u, userid=id);
+  var userid = unlabel(id);
+  var pageid = dbpersistDocument(userid, page);
+  OK (loadPage(pageid))
+}
+
+sig createPage : (Cred, String) -> Checked(WikiPage{PageLabel})
+fun createPage(cred, title) policy {
+  var l = defaultACLabel;
+  var body = LabeledBlock(emptyAnnot, l, relabel(emptyPage.body,l));
+  var page = (emptyPage with title = title, body = body);
+  persistPage(cred, page)
+}
+
+
+########## PROVENANCE POLICIES ##########
+
+# sig replaceBlockProv : (Cred, WikiPage{PageLabel}, Path, Document)
+# -> Checked(WikiPage{PageLabel})
+# fun replaceBlockProv(cred, page_, path, doc) {
+#   fun replace (_) {
+#     var l_prov = 
+#     mkProvLabel(Modify, cred.name, "Path:"++pathToString(path));
+#     getBlock(cred, page_, path) 
+#     +>>= fun ((l1, b)) {
+#       switch (doc) {
+#         case LabeledBlock(a, l2, b_l2) -> 
+#           var l3 = joinLabels(l2, l_prov);
+#           OK (LabeledBlock(a, l3, b_l2))
+#         case _ ->
+#           var l3 = joinLabels(l1, l_prov);
+#           OK (LabeledBlock(emptyAnnot, l3, label(doc)))
+#       }
+#     }
+#   }
+#   applyWriteToBlock(cred, replace, path)(page_)
+#   # merge repeated Labeled blocks
+#   +>>= mergeLabeledBlocks(cred)
+# }
+
+# sig createPageProv : (Cred, String) -> Checked(WikiPage{PageLabel})
+# fun createPageProv(cred, title) policy {
+#   var l_prov = mkProvLabel(CreatePage, cred.name, title);
+#   # the default AC policy is to allow readers to read and writers to write
+#   var l = joinLabels(l_prov, defaultACLabel);
+#   var body = LabeledBlock(emptyAnnot, l, label(emptyPage.body));
+#   var page = (emptyPage with title = title, body = body);
+#   persistPage(cred, page)
+# }
+
+# sig pasteBlockProv : (Cred, WikiPage{PageLabel}, Path, Label, Document)
+# -> Checked(WikiPage{PageLabel})
+# fun pasteBlockProv(cred, page_, path, l, pasteBlock) {
+#   var prov_l = 
+#   mkProvLabel(Paste, cred.name, "Path:"++pathToString(path));
+#   var l2 = joinLabels(l, prov_l);
+#   var pasteBlock = LabeledBlock(emptyAnnot, l2, label(pasteBlock));
+
+#   fun paste(parent) {
+#     var b =
+#     switch (parent) {
+#       case CompoundBlock(a, bs) -> CompoundBlock(a, bs ++ [pasteBlock])
+#       case _ -> CompoundBlock(emptyAnnot, [parent,pasteBlock])
+#     };
+#     OK (b)
+#   }
+#   applyWriteToBlock(cred, paste, path)(page_)
+#   # merge repeated Labeled blocks
+#   +>>= mergeLabeledBlocks(cred)
+# }
+### cpa.links
+### Authors: Nik Swamy, Brian Corcoran, Cody Burton
+### This is main file of the CPA/SEWiki application
+### This file contains most of the application-level logic of the program.
+
+### Below are all included files:
+#include preludemax.links
+#include checked.links
+#include slabel.links
+#include labels.links
+#include db_defs.links
+#include generic_policy.links
+#include block.links
+#include db.links
+#include block_policy.links
+#include tagmgmt.links
+
+var site_footer = 
+    <div>
+      CPA demonstration account:<br/>
+      username: <em>demo</em><br/>
+      password: <em>demopw</em>
+    </div>;
+
+sig accessWikiPage : (Cred, WikiPage{PageLabel}) -> WikiPage
+fun accessWikiPage(cred, page_) {
+  var page = accessPage(page_);
+  (page with body = accessDocument(cred,page.body))
+}
+
+sig accessDocument : (Cred, Document) -> Document
+fun accessDocument (cred, doc) server {
+  
+  # go through the document and enforce the "policy"
+  # currently this just goes through and checks the labels, 
+  # and prunes any that do not match.
+  fun accessDoc (doc:Document) {
+    switch (doc) {
+      case UnlabeledBlock (_,_,_) -> 
+        # shouldn't occur
+        RestrictedBlock("Encountered UnlabeledBlock in accessDoc")
+      case LabeledBlock (x) -> 
+        unpack x as (a, l, b_l);
+        switch (access(cred, l, b_l)) {
+          case OK(b) -> 
+            UnlabeledBlock (a, l, mapDocument(accessDoc)(b))
+          case Exception(e) -> switch (e) {
+            case SecurityException(e) -> 
+              UnlabeledBlock (a, l, RestrictedBlock(e))
+            case _ -> exceptionToError(e)
+          }
+        }
+      case _ -> doc
+    }
+  }
+  mapDocument(accessDoc)(doc)
+}
+
+sig replaceBlock : (Cred, WikiPage{PageLabel}, Path, Document) 
+-> Checked(WikiPage{PageLabel})
+fun replaceBlock (cred, page_, path, doc) {
+  debug("replaceBlock: replacing block: " ++ pathToString(path));
+  fun replace(_) { OK(doc) }
+  applyWriteToBlock(cred, replace, path)(page_)
+}
+
+sig relabelBlock : (Cred, Label is lab) -> (Document) -> Checked(Document)
+fun relabelBlock(cred, newl)(b) {
+  switch (b) {
+    case LabeledBlock (x) ->
+      unpack x as (a, oldl, b_oldl);
+      debug("relabelBlock: relabeling: " ++ labelToString(oldl));
+      debug("relabelBlock: adding: " ++ labelToString(newl));
+      access(cred, oldl, b_oldl)
+      #+>>= fun (b) { addLabelProv(cred, Just(oldl), newl, b) }
+      +>>= fun (_) { 
+        switch (addLabel(cred, oldl, newl, b_oldl)) {
+          case Exception (e) -> Exception (e)
+          case OK (dt) ->
+            unpack dt as (l, b_l);
+            debug("relabelBlock: new combined label: " ++ labelToString(l));
+            #OK (LabeledBlock (a, l, b_l)) 
+            var btuple = 
+              pack (a, l, b_l) as (DocAnnotation, m<-Label is lab, Document{m});
+            OK (LabeledBlock (btuple))
+        }
+      }
+    case _ -> throw(PathException(
+      "relabelBlock: Wrong block type; expected LabeledBlock, found "
+      ++getBlockType(b)
+    ))
+  }
+}
+
+sig labelBlock : (Cred, Label is lab) -> (Document) -> Checked(Document)
+fun labelBlock(cred, l)(b) {
+  switch (newLabel(cred, l, b)) {
+    case Exception (e) -> Exception (e)
+    case OK (dt) ->
+      unpack (dt) as (l2, b_l);
+      OK (LabeledBlock (emptyAnnot, l2, b_l)) 
+  }
+}
+
+# sig showAuthorInfo : (Cred, WikiPage{PageLabel}) -> Xml
+# fun showAuthorInfo(cred, page_) {
+#   var page = accessPage(page_);
+#   var author = 
+#   switch (page.body) {
+#     case LabeledBlock (x) ->
+#       unpack x as (_, l, _);
+#       switch (getCreator(l)) {
+#         case Just(author) -> stringToXml(author)
+#         case Nothing -> stringToXml("No author info")
+#       }
+#     case _ -> stringToXml("No author info")
+#   };
+#   <#>
+#     <div class="pageinfo">
+#       <table>
+#         <tr>
+#           <td>Created by: </td>
+#           <td>{ author }</td>
+#         </tr>
+#       </table>
+#     </div>
+#   </#>
+# }
+
+
+################################################################################
+# UI WIDGET CONSTRUCTION
+################################################################################
+
+sig getFormat : (FormatType) -> (Xml) -> Xml
+fun getFormat(tag)(b) {
+  switch(tag) {
+    case Bold -> <strong> {b} </strong>
+    case Emph -> <em> {b} </em>
+    case Sub -> <sub> {b} </sub>
+    case Sup -> <sup> {b} </sup>
+    case Del -> <del> {b} </del>
+    case Hdr1 -> <h1> {b} </h1>
+    case Hdr2 -> <h2> {b} </h2>
+    case WS(HLine) -> <hr/>
+    case WS(Para) -> <p/>
+    case Link(url) -> <a href="{url}">{b}</a>
+    case ImageLink(url) -> <img src="{url}"/>
+    case BlockQuote ->     <pre>{b}</pre>
+    case _ -> emptyXmlString
+  }
+}
+sig mkWikiLink : (Cred) -> (String) -> Xml
+fun mkWikiLink(cred)(wikiTitle) {
+  var pids = dbgetPidsByTitle(wikiTitle);
+  switch (pids) {
+    case pid::_ -> 
+    <a l:href="{showWikiPage((cred, pid))}">{stringToXml(wikiTitle)}</a>
+    case _ -> 
+    <a l:href="{newNamedWikiPage(cred, wikiTitle)}">{stringToXml(wikiTitle++"?")}</a>
+  }
+}
+
+sig viewWikiText : ((Cred, WikiPage{PageLabel})) -> Xml
+fun viewWikiText ((cred, page_))  {
+  # either returns raw Xml, or a table
+  # -> Tabular (XmlItem) | RawXml (XmlItem)
+  fun viewWikiBlock(doc, path:((Path)->Path)) {
+    fun mkEditBlock(path) {
+#      var pathName = pathToString(path);
+      <div>
+        <form method="post" l:action="{editWikiText(cred, page_, path)}">
+          <button type="submit" value="Edit">Edit</button>
+        </form>
+      </div>
+#        <form method="post" l:action="{copyWikiBlock(cred, page_, path)}">
+#          <button type="submit">Copy</button>
+#        </form>
+#        <form method="post" l:action="{pasteWikiBlock(cred, page_, path)}">
+#          <button type="submit">Paste</button>
+#        </form>
+#      </div>
+    }
+    fun mkTable(color, xml, path) {
+      <table border="1" bordercolor="{color}">
+        <tr>
+          <td>{mkEditBlock(path(Destination))}</td>
+          <td>{xml}</td>
+        </tr>
+      </table>
+    }
+    switch(doc:Document) {
+      case CompoundBlock(_, bs) -> 
+        var (bs,ts) = unzip(
+          mapNumbered(
+            fun (sib,child) {
+              viewWikiBlock(child, addChildN(sib)(path))
+            }, bs
+          )
+        );
+        if (any(fun (x) { x == Tabular }, ts)) { 
+          var b = concat(
+            mapNumbered(
+              fun (n,(b,t)) { 
+                if (t == RawXml)  {
+                  mkTable("blue", b, addChildN(n)(path))
+                }
+                else b
+              },
+              zip(bs,ts)
+            )
+          );
+          (b, Tabular)
+        }
+        else { 
+          var b = concat(bs);
+          (b,RawXml)
+        }
+
+      case FormattedBlock(_, ft, b) -> 
+        switch (ft) {
+          case WikiLink ->
+            var title = blockToText(b);
+            (mkWikiLink(cred)(title), RawXml)
+          case _ ->
+            var f = getFormat(ft);
+            var (b,t) = viewWikiBlock(b, addChild(path));
+            switch (t) {
+              case RawXml -> (f(b), RawXml)
+              case Tabular -> (mkTable("green", b, id), Tabular)
+            }
+        }
+
+      # change the label on a block
+      case UnlabeledBlock(_, l, b) -> 
+        (
+        <table>
+          <tr>
+            <td class="label">
+              <span class="label">
+              {
+                #labelToXml(l)
+                stringToXml("Labeled")
+              }
+              </span>
+            </td>
+            <td>{
+            mkTable(
+              "red", 
+              first(viewWikiBlock(b, addChild(path))), 
+              addChild(path)
+            )
+            }
+            </td>
+          </tr>
+        </table>,
+        Tabular
+        )
+      case WordBlock(_, text) -> 
+        (stringToXml(text), RawXml)
+      case RestrictedBlock(error) ->
+        (<span class="restricted">{stringToXml(error)}</span>, RawXml)
+      case _ -> 
+        (stringToXml("Unsupported document type: "++getBlockType(doc)), RawXml)
+    }
+  } 
+
+  var page = accessWikiPage(cred, page_);
+  mkWikiPage(cred, "Select Block to Edit: "++page.title, page_,
+    first(viewWikiBlock(page.body, id))
+  )
+}
+
+
+# sig locallyPersistBlock : (Label, Document) -> ()
+# fun locallyPersistBlock(l,b) {
+#   switch (getNodeId(b)) {
+#     case NewNode -> ()
+#     case NodeId(bid) -> 
+#       var data = pickle_value((l,bid));
+#       # Links can't handle cookies containing '='
+#       var data = map(fun (c) { if (c=='=') '-' else c }, data);
+#       setCookie("CopiedBlock", data);
+#   }
+# }
+
+# sig locallyRetrieveBlock : () -> (Label, Document)
+# fun locallyRetrieveBlock() {
+#   var data = getCookie("CopiedBlock");
+#   # Links can't handle cookies containing '='
+#   var data = map(fun (c) { if (c=='-') '=' else c }, data);
+#   debug("locallyRetrieveBlock: cookie data is: " ++ data);
+#   var (l,blockid) = unpickle_value(data);
+
+#   (l, dbloadBlock(blockid))
+# }
+
+# sig pasteWikiBlock : (Cred, WikiPage{PageLabel}, Path) -> Xml
+# fun pasteWikiBlock(cred, page_, path) {
+#   var (l,pasteBlock) = locallyRetrieveBlock();
+#   var page_ = 
+#   catch(pasteBlockProv(cred, page_, path, l, pasteBlock));
+  
+#   viewWikiText((cred, page_))
+# }  
+
+# to deal with the fact that we only want to result one result of a 
+# ComponentBlock, we just reload the page at the end.
+# See editWikiLabel for an alternate approach
+sig editWikiText : (Cred, WikiPage{PageLabel}, Path) -> Xml
+fun editWikiText (cred, page_, qpath)  {
+
+  # either returns raw Xml, or a table
+  # -> Formlet(Xml)
+  fun editWikiBlock(doc, path:((Path)->Path)) {
+    fun mkTable(color, xml, path) {
+      <table>
+        <tr>
+          <td>{xml}</td>
+        </tr>
+      </table>
+    }
+    if (qpath == path(Destination)) {
+      formlet
+      <#>
+        {textarea(documentToText(doc)) -> newText}
+        <button type="submit">Save WikiEdit</button>      
+        <form method="post" l:action="{viewWikiText((cred,page_))}">
+          <button type="submit">Cancel</button>
+        </form>
+      </#>
+      yields {
+        var newDoc = parseWikiBody(newText);
+        var page_ = catch(replaceBlock(cred, page_, qpath, newDoc));
+        ()
+      }
+    } 
+    else {
+      switch(doc:Document) {
+        case CompoundBlock(_, bs) -> 
+          fun getPage(ps:[Formlet((Cred,WikiPage{PageLabel}))]) {
+            switch (ps) {
+              case [] -> pure(page_)
+              case p::_ -> p @@=> snd
+            }
+          }
+          var bs = mapNumbered(
+            fun (sib, child) {
+              editWikiBlock(child, addChildN(sib)(path))
+            }, bs:[Document]
+          );
+          formlets(bs) @@=> fun (_) { () }
+          
+        case FormattedBlock(_, ft, b) -> 
+          switch (ft) {
+            case WikiLink ->
+              var title = blockToText(b);
+              formlet <#>{mkWikiLink(cred)(title)}</#> yields ()
+            case _ ->
+              var f = getFormat(ft);
+              plug(f, editWikiBlock(b, addChild(path)))
+          }
+        # change the label on a block
+        case UnlabeledBlock(_, l, b) -> 
+          fun format(b) {
+          <table>
+            <tr>
+              <td class="label">
+                <span class="label">
+                {
+                  #labelToXml(l)
+                  stringToXml("Labeled")
+                }
+                </span>
+              </td>
+              <td>{ mkTable("red", b, addChild(path)) }
+              </td>
+            </tr>
+          </table> 
+          }
+          plug(format, editWikiBlock(b, addChild(path)))
+          
+        case WordBlock(_, text) -> 
+          formlet <#>{stringToXml(text)}</#> yields ()
+
+        case RestrictedBlock(error) ->
+          formlet 
+          <span class="restricted">{stringToXml(error)}</span>
+          yields ()
+
+        case _ -> 
+          formlet 
+          <#>{
+          stringToXml("Unsupported document type: "++getBlockType(doc))
+          }</#>
+          yields ()
+      }
+    }
+  }
+
+  var page = accessWikiPage(cred, page_);
+  mkWikiPage(
+    cred, "Edit Wiki Page", page_,
+    render(
+      editWikiBlock(page.body, id) 
+        @@=> fun (_) { (cred, reloadPage(page_)) },
+      viewWikiText
+    )
+  )
+}
+
+sig editLabelBlock : (Cred, WikiPage{PageLabel}, (Path)->Path) -> (Document, (Path)->Path) -> Formlet (Maybe (WikiPage{PageLabel}))
+fun editLabelBlock(cred, page_, qpath)(doc, path) {
+  var userLabels = dbgetAvailableLabels();  
+  fun mkTable(color, xml, path) {
+  <table>
+    <tr>
+      <td>{xml}</td>
+    </tr>
+  </table>
+  }
+  if (qpath(Destination) == path(Destination)) {
+    debug("Reached path: " ++ pathToString(path(Destination)));
+    # get current labels
+    var (l, labelFn) =
+    switch (doc) {
+      case UnlabeledBlock(_,l,_) -> (l, relabelBlock)
+      case _ -> 
+        # get inherited current label
+        var dt = catch(getBlock(cred, page_, qpath(Destination)));
+        unpack dt as (l,_);
+        #var (l, _) = 
+        (l, labelBlock)
+    };
+    fun xmlFn(xmlData) {
+    <#>
+      <table border="1" bordercolor="red">
+        <tr>
+          <td class="label" rowspan="2">
+          { xmlData }
+          </td>
+          <td>
+          {documentToHtml(cred,doc)}
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <button type="submit">Save Labels</button>      
+            <form method="post" l:action="{viewWikiText((cred,page_))}">
+              <button type="submit">Cancel</button>
+            </form>
+          </td>
+        </tr>
+      </table>
+    </#>
+    }
+    fun yieldFn (l_:(Label is lab)) { 
+      # make this node labeled
+      var labelFn = labelFn(cred, l_);
+      var page_ = catch(
+        applyWriteToBlock(cred, labelFn, path(Destination))(page_)
+      );
+      Just(page_)
+    }
+    #error("calling makeLabelFormlet");
+    plug(xmlFn, makeLabelFormlet(userLabels,l)) @@@ pure(yieldFn)
+
+#     formlet
+#     <#>
+#       <table border="1" bordercolor="red">
+#         <tr>
+#           <td class="label" rowspan="2">
+#           {
+#             makeLabelFormlet(userLabels, l) -> l_
+#           }
+#           </td>
+#           <td>
+#           {documentToHtml(cred,doc)}
+#           </td>
+#         </tr>
+#         <tr>
+#           <td>
+#             <button type="submit">Save Labels</button>      
+#             <form method="post" l:action="{viewWikiText((cred,page_))}">
+#               <button type="submit">Cancel</button>
+#             </form>
+#           </td>
+#         </tr>
+#       </table>
+#     </#>
+#     yields {
+#       # make this node labeled
+#       var labelFn = labelFn(cred, l_);
+#       var page_ = catch(
+#         applyWriteToBlock(cred, labelFn, path(Destination))(page_)
+#       );
+#       Just(page_)
+#     }
+  }  
+  else {
+    switch(doc:Document) {
+      case CompoundBlock(_, bs) -> 
+        var bs = mapNumbered(
+          fun (sib,child) {
+            error("calling CB:editLabelBlock");
+            editLabelBlock(cred, page_, qpath)(child, addChildN(sib)(path))
+          }, bs
+        );
+        formlets(bs) @@=> 
+        fun (bs) { 
+          switch (search(isJust,bs)) {
+            case Nothing -> Nothing
+            case Just(b) -> b
+          }
+        }
+        
+        case FormattedBlock(_, ft, b) -> 
+          switch (ft) {
+            case WikiLink ->
+              var title = blockToText(b);
+              formlet <#>{mkWikiLink(cred)(title)}</#> yields Nothing 
+            case _ ->
+              var f = getFormat(ft);
+              error("calling FB:editLabelBlock");
+              plug(f, editLabelBlock(cred, page_, qpath)(b, addChild(path)))
+          }
+        # change the label on a block
+        case UnlabeledBlock(_, l, b) -> 
+          fun format(b) {
+          <table>
+            <tr>
+              <td class="label">
+                <span class="label">
+                {
+                  #labelToXml(l)
+                  stringToXml("Labeled")
+                }
+                </span>
+              </td>
+              <td>{ mkTable("red", b, addChild(path)) }
+              </td>
+            </tr>
+          </table> 
+          }
+          error("calling LB:editLabelBlock");
+          plug(format, editLabelBlock(cred, page_, qpath)(b, addChild(path)))
+          
+        case WordBlock(_, text) -> 
+          formlet <#>{stringToXml(text)}</#> yields Nothing
+          
+        case RestrictedBlock(error) ->
+          formlet 
+          <span class="restricted">{stringToXml(error)}</span>
+          yields Nothing
+            
+        case _ -> 
+          formlet 
+          <#>{
+          stringToXml("Unsupported document type: "++getBlockType(doc))
+          }</#>
+          yields Nothing
+    }
+  }
+}
+  
+
+# this function had the same problem as editWikiText. 
+# Here we have the changed node return Just(LPage), 
+# while the other terminals return Nothing.
+sig editWikiLabel : (Cred, WikiPage{PageLabel}, (Path)->Path) -> Xml
+fun editWikiLabel (cred, page_, qpath)  {
+  var page = accessWikiPage(cred, page_);
+  debug(blockToString(page.body));
+  mkWikiPage(cred, "Edit Page Label", page_,
+    render(
+      editLabelBlock(cred, page_, qpath)(page.body, id)
+      @@=> fun (b) { switch (b) {
+        case Just(p) -> (cred, p)
+        case Nothing -> error("editWikiLabel: impossible result?")
+      }},
+      viewWikiLabel
+    )
+  )
+}
+
+
+sig viewWikiLabel : ((Cred, WikiPage{PageLabel})) -> Xml
+fun viewWikiLabel ((cred, page_))  {
+  var page = accessWikiPage(cred, page_);
+  debug(blockToString(page.body));
+  
+  fun mkEditBlock(path) {
+    #var pathName = pathToString(path(Destination));
+    #<form method="post" l:action="{editWikiLabel(cred, page_, path)}">
+    #<button type="submit">Label</button>
+    #</form>
+    emptyXmlString
+  }
+  fun mkTable(color, xml, path) {
+  <table border="1" bordercolor="{color}">
+    <tr>
+      <td>{mkEditBlock(path)}</td>
+      <td>{xml}</td>
+    </tr>
+  </table>
+  }
+
+  # either returns raw Xml, or a table
+  # -> Tabular (XmlItem) | RawXml (XmlItem)
+  fun viewWikiBlock(doc, path:((Path)->Path)) {
+    switch(doc:Document) {
+      case CompoundBlock(_, bs) -> 
+        var (bs,ts) = unzip(
+          mapNumbered(
+            fun (sib,child) {
+              viewWikiBlock(child, addChildN(sib)(path))
+            }, bs
+          )
+        );
+#        if (any(fun (x) { x == Tabular }, ts)) { 
+        if (true) { 
+          var b = concat(
+            mapNumbered(
+              fun (n,(b,t)) { 
+                if (t == RawXml)  {
+                  mkTable("blue", b, addChildN(n)(path))
+                }
+                else b
+              },
+              zip(bs,ts)
+            )
+          );
+          (b, Tabular)
+        }
+        else { 
+          var b = concat(bs);
+          (b,RawXml)
+        }
+
+      case FormattedBlock(_, ft, b) -> 
+        switch (ft) {
+          case WikiLink ->
+            var title = blockToText(b);
+            (mkWikiLink(cred)(title), RawXml)
+          case _ ->
+            var f = getFormat(ft);
+            var (b,t) = viewWikiBlock(b, addChild(path));
+            switch (t) {
+              case RawXml -> (f(b), RawXml)
+              case Tabular -> (mkTable("green", b, id), Tabular)
+            }
+        }
+      # change the label on a block
+      case UnlabeledBlock(_, l, b) -> 
+        (
+        <table>
+          <tr>
+            <td class="label">
+              <span class="label">
+                {stringToXml("Labeled")}
+                <form method="POST" l:action="{
+                editWikiLabel(cred, page_, path)
+                }">
+                  <button type="submit">Edit</button>
+                </form>
+              </span>
+            </td>
+            <td>{
+            first(viewWikiBlock(b, addChild(path)))
+            }
+            </td>
+          </tr>
+        </table>,
+        Tabular
+        )
+      case WordBlock(_, text) -> 
+        (stringToXml(text), RawXml)
+      case RestrictedBlock(error) ->
+        (<span class="restricted">{stringToXml(error)}</span>, RawXml)
+      case _ -> 
+        (stringToXml("Unsupported document type: "++getBlockType(doc)), RawXml)
+    }
+  } 
+
+  var (b,t) = viewWikiBlock(page.body, id);
+  mkWikiPage(cred, "Select Block to Label: "++page.title, page_, b)
+}
+
+
+sig viewPageLabels : (Cred, WikiPage{PageLabel}) -> Xml
+fun viewPageLabels (cred, page_)  {
+  fun viewBlockLabels(doc) {
+    switch(doc:Document) {
+      case CompoundBlock(_, bs) -> concatMap(viewBlockLabels, bs)
+      case FormattedBlock(_, ft, b) -> 
+        switch (ft) {
+          case WikiLink ->
+            var title = blockToText(b);
+            mkWikiLink(cred)(title)
+          case _ ->
+            var f = getFormat(ft);
+            f(viewBlockLabels(b))
+        }
+      # change the label on a block
+      case UnlabeledBlock(_, l, b) -> 
+        <table border="1" bordercolor="red">
+          <tr>
+            <td class="label">
+               <span class="label">
+               {
+                 labelToXml(l:Label is lab)
+               }
+              </span>
+            </td>
+            <td>{
+            viewBlockLabels(b)
+            }
+            </td>
+          </tr>
+        </table>
+      case WordBlock(_, text) -> stringToXml(text)
+      case RestrictedBlock(error) ->
+          <span class="restricted">{stringToXml(error)}</span>
+      case _ -> 
+        stringToXml("Unsupported document type: "++getBlockType(doc))
+    }
+  } 
+
+  var page = accessWikiPage(cred, page_);
+  debug(blockToString(page.body));
+  
+  mkWikiPage(cred, "Page Labels View", page_,
+    viewBlockLabels(page.body)
+  )
+}
+
+sig getPageListMenu : (Cred) -> Xml
+fun getPageListMenu(cred)  {
+   var pagelist = dbGetPageList();
+   render(pageListFormlet(pagelist,cred,"Load Selected Page"), showWikiPage)
+}
+
+# pretty-print a page title (truncate long names)
+fun ppPageTitle(name, len) {
+  if (length(name) > len)
+    take(len-3,name) ++ "..."
+  else name
+}
+
+fun pageListFormlet(pagelist,cred:Cred,prompt){
+  var choicelist =
+  for (var temp <- pagelist)
+    [(temp.pageid, ppPageTitle(temp.title, 30))];
+  var choicelist = [("0","---")] ++ choicelist;
+  formlet <#>
+  { choice(choicelist) -> pid }
+  { submitButton(prompt, ()) -> _ }
+  </#>
+  yields
+  (cred, stringToInt(pid))
+}
+
+sig formatPageList : ([(pageid:String, title:String)]) -> Xml
+fun formatPageList(pl)  {
+   switch (pl) {
+   case [] ->   
+     emptyXmlString
+   case p::ps ->
+     <option value="{(p.pageid)}">
+     {stringToXml(p.title)}
+         </option> ++ 
+     {formatPageList(ps)}
+   }
+}
+
+
+################################################################################
+# WIKI PRESENTATION 
+################################################################################
+
+fun newWikiPage(cred) {
+  newNamedWikiPage(cred, "")
+}
+
+# preview is currently broken (we make all edits to live data)
+fun newNamedWikiPage(cred, title) {
+  mkWebPage("Create Page", 
+    #render(createWikiPageFormlet(cred, title), previewPage)
+    render(createWikiPageFormlet(cred, title), showLabeledWikiPage)
+  )
+}
+
+sig documentToHtml : (Cred, Document) -> Xml
+fun documentToHtml(cred, b) {
+  docToHtml(b,mkWikiLink(cred))
+}
+
+sig showLabeledWikiPage : ((Cred, WikiPage{PageLabel})) -> Xml
+fun showLabeledWikiPage((cred, page_)) {
+  var page = accessWikiPage(cred, page_);
+  mkWikiPage(cred, page.title, page_, 
+    documentToHtml(cred, page.body)
+  )
+}
+
+sig showWikiPage : ((Cred, Int)) -> Xml
+fun showWikiPage((cred, pageid)) {
+  var page_ = loadPage(pageid);
+  showLabeledWikiPage((cred, page_))
+}
+
+sig createWikiPageFormlet : (Cred,String) -> Formlet((Cred,WikiPage{PageLabel}))
+fun createWikiPageFormlet(cred,title) {
+  formlet
+  <#>
+    <table>
+      <tr>
+        <td>Title:</td>
+        <td>
+        {inputValue(title) -> title}
+        </td>
+      </tr>
+      <tr>
+        <td valign="top">Body:</td>
+        <td>
+        { textarea("") -> bodyText }
+        </td>
+      </tr>
+      <tr>
+        <td colspan="2">
+        { submitButton("Save Page", ()) -> _ }
+        </td>
+      </tr>
+    </table>
+  </#>
+  yields {
+    fun f (_) { OK(parseWikiBody(bodyText)) }
+    var page_ = 
+    catch(
+      #createPageProv(cred, title)
+      createPage(cred, title)
+      +>>= applyWriteToBlock(cred, f, Child(Destination))
+    );
+    (cred, page_)
+  }    
+}
+
+################################################################################
+# PAGE STRUCTURE STUFF 
+################################################################################
+
+sig mainPage : (Cred) -> Xml
+fun mainPage(cred) {
+  mkWebPage("Welcome " ++ cred.name,
+  <div id="wiki"> 
+    <div id="mainframe"> </div>
+    <div id="controlframe">
+      <table class="ctrlbox" border="0">
+        <tr>
+          <td valign="top">
+            <form method="post" l:action="{newWikiPage(cred)}">
+              <input type="submit"  value="Create new page"/>
+            </form>
+          </td>
+          <td valign="top">{getPageListMenu(cred)}</td>
+          <td valign="top">
+            <form method="post" l:action="{mainLogin()}">
+              <input type="submit" value="Logout"/>
+            </form>
+          </td>
+        </tr>
+      </table>
+    </div>
+  </div>)
+}
+
+
+################################################################################
+# login stuff
+################################################################################
+
+
+sig doLogin : ((username:String, password:String)) -> Xml
+fun doLogin(userinfo) {
+  switch(login(userinfo.username, userinfo.password)) {
+    case OK (cred) -> mainPage(cred)
+    case _ -> failedLogin()
+  }
+}
+
+fun failedLogin() {
+  mkWebPage("Failed Login", 
+  <div>
+    {render(loginFormlet, doLogin)}
+    <hr/>
+    {site_footer}
+  </div>
+)
+}
+
+fun mainLogin() { 
+  mkWebPage("Login", 
+  <div>
+    {render(loginFormlet, doLogin)}
+    <hr/>
+    {site_footer}
+  </div>
+) 
+}
+
+sig mkWikiPage : (Cred, String, WikiPage{PageLabel}, Xml) -> Xml
+fun mkWikiPage(cred, title, page_, content) { 
+  mkWebPage(title,
+  <div id="wiki"> 
+    <div id="mainframe">{ content }</div>
+    { 
+      #showAuthorInfo(cred, page_) ++
+      controlFrame(cred, page_)
+    }
+  </div>
+  )
+}
+
+sig controlFrame : (Cred, WikiPage{PageLabel}) -> Xml
+fun controlFrame(cred, page_) {
+<div id="controlframe">
+  <table class="ctrlbox" border="0">
+    <tr>
+      <td valign="top">
+        <form method="post" 
+        l:action="{viewWikiText((cred, page_))}">
+          <input type="submit" value="Modify page"/>
+        </form>
+      </td>
+      <td valign="top">
+        <form method="post" 
+        l:action="{
+          viewWikiLabel((cred, page_))
+        }">
+          <input type="submit" value="Edit ACL labels"/>
+        </form>
+      </td>
+      <td valign="top">
+        <form method="post" 
+        l:action="{
+          viewPageLabels(cred, page_)
+        }">
+          <input type="submit" value="View all labels"/>
+        </form>
+      </td>
+      <td valign="top">
+        <form method="post" l:action="{
+        catch(deletePage(cred, page_));
+        mainPage(cred)
+        }">
+          <input type="submit" value="Delete page"/>
+        </form>
+      </td>
+      <td valign="top">
+        <form method="post" l:action="{mainPage(cred)}">
+          <input type="submit" value="Main menu"/>
+        </form>
+      </td>
+    </tr>
+  </table>
+</div>
+}
+
+sig mkWebPage : (String, Xml) -> Xml
+fun mkWebPage(title, content) {
+  var title = stringToXml(title);
+# Links doesn't support DOCTYPES
+#<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/2001/REC-xhtml11-20010531/DTD/xhtml11-flat.dtd">
+# removed:     <script type="text/javascript" src="domsandbox.js" />
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <title>{stringToXml("CPA::")++title}</title>
+    <link rel="stylesheet" type="text/css" href="cpa.css" media="all"/>
+  </head>
+  <body>
+    <h1 class="header">{title}</h1>
+    { content }
+  </body>
+</html>
+}
+
+mainLogin()

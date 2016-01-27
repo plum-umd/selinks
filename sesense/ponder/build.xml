@@ -1,0 +1,139 @@
+<!-- adapted from ponder2tutorial build.xml -->
+
+<project name="Ponder2Selinks" default="run" basedir=".">
+
+	<property name="build_classes" value="bin" />
+	<property name="sources" value="src" />
+	<property name="lib" value="lib" />
+	<property name="apt.generated" value="apt_generated" />
+	<property name="antlr.jar" value="${lib}/antlr-runtime-3.0.jar" />
+	<property name="ponder2.jar" value="${lib}/ponder2.jar" />
+	<property name="layout.jar" value="${lib}/swing-layout-1.0.3.jar" />
+
+	<pathconvert property="ponder.codebase" targetos="unix">
+		<path path="${basedir}/${ponder2.jar}" />
+		<filtermapper>
+			<replacestring from=" " to="%20" />
+		</filtermapper>
+	</pathconvert>
+
+	<pathconvert property="selinks.codebase" targetos="unix">
+		<path path="${basedir}/${build_classes}" />
+		<filtermapper>
+			<replacestring from=" " to="%20" />
+		</filtermapper>
+	</pathconvert>
+
+	<property name="codebase" value="file:///${ponder.codebase} file:///${selinks.codebase}/" />
+
+	<path id="classpath">
+		<path path="${build_classes}" />
+		<path path="${sources}" />
+		<pathelement location="${ponder2.jar}" />
+		<pathelement location="${antlr.jar}" />
+		<pathelement location="${layout.jar}" />
+	</path>
+
+	<target name="boot" if="boot">
+		<property name="bootarg" value="-boot ${boot}" />
+	</target>
+
+	<!-- ================================= 
+          target: build              
+         ================================= -->
+	<target name="build" description="--> compiles everything">
+		<mkdir dir="${apt.generated}" />
+		<mkdir dir="${build_classes}" />
+		<apt compile="true" preprocessdir="${apt.generated}" srcdir="${sources}" destdir="${build_classes}">
+			<classpath>
+				<pathelement location="${ponder2.jar}" />
+				<pathelement location="${layout.jar}" />
+			</classpath>
+		</apt>
+		<rmic base="${build_classes}" includes="**/*.class" verify="yes">
+			<classpath>
+				<pathelement location="${ponder2.jar}" />
+				<pathelement location="${layout.jar}" />
+			</classpath>
+		</rmic>
+	</target>
+
+	<!-- ================================= 
+          target: clean              
+         ================================= -->
+	<target name="clean" description="--> removes all generated files">
+		<delete dir="${build_classes}" failonerror="false" />
+		<delete includeemptydirs="true" failonerror="false">
+			<fileset dir="${apt.generated}" includes="**/*" />
+		</delete>
+	</target>
+
+	<!-- ================================= 
+          target: rebuild              
+         ================================= -->
+	<target name="rebuild" depends="clean,build" description="--> cleans and rebuilds the system" />
+
+	<!-- ================================= 
+          target: rmi             
+         ================================= -->
+	<target name="rmi" depends="build" description="--> checks that rmiregistry is running or starts it">
+		<java classname="net.ponder2.support.CheckRMI" fork="true">
+			<classpath refid="classpath" />
+			<jvmarg value="-Djava.rmi.server.codebase=${codebase}" />
+			<arg line="-rmi -" />
+		</java>
+	</target>
+
+	<!-- ================================= 
+          target: run              
+         ================================= -->
+	<target name="run" depends="build, rmi" description="--> runs the Ponder2 SMC">
+		<java classname="net.ponder2.SelfManagedCell" fork="true">
+			<classpath refid="classpath" />
+			<jvmarg value="-Djava.rmi.server.codebase=${codebase}" />
+			<arg line="${bootarg} ${autharg} -auth deny" />
+		</java>
+	</target>
+
+	<!-- ================================= 
+          target: sim
+         ================================= -->
+	<target name="sim" depends="build, rmi" description="--> runs the sensor network simulation">
+		<java classname="net.sesense/SimSensors" fork="true">
+		  <!-- spawn="true"> -->
+			<classpath refid="classpath" />
+			<jvmarg value="-Djava.rmi.server.codebase=${codebase}" />
+			<!-- <arg line="${bootarg} ${autharg} -auth allow" /> -->
+		</java>
+	</target>
+
+	<!-- ================================= 
+          target: simend
+         ================================= -->
+	<target name="simend" depends="build, rmi" description="--> shuts down the sensor network simulation">
+		<java classname="net.sesense/SimSensors" fork="true">
+			<classpath refid="classpath" />
+			<jvmarg value="-Djava.rmi.server.codebase=${codebase}" />
+			<arg line="shutdown"/> 
+		</java>
+	</target>
+
+	<!-- ================================= 
+          target: sesense              
+         ================================= -->
+	<target name="sesense" depends="build" description="--> runs the SMC and reads sesense/strap.p2">
+		<antcall target="run">
+			<param name="bootarg" value="-boot sesense/strap_hierarchy.p2 -boot sesense/strap_policy.p2 -boot sesense/policy.p2"/>
+		</antcall>
+	</target>
+
+	<!-- ================================= 
+          target: mktar              
+         ================================= -->
+	<target name="mktar" depends="build" description="--> Creates a tar archive of this stuffs">
+		<tar destfile="Ponder2Sesense.tar" longfile="gnu">
+			<tarfileset dir="." excludes=".classpath,.factorypath,.project,.settings,Ponder2Selinks.tar" prefix="Ponder2Selinks" />
+		</tar>
+	</target>
+
+</project>

@@ -1,0 +1,15 @@
+/export/home/mwh/ocaml-3.09/bin:
+/fs/macdonald/selinks/pgsql/bin:
+/fs/macdonald/selinks/apache/bin:
+
+selinks
+exec "/usr/local/bin/java" -classpath 
+"/fs/macdonald/selinks/sesense/webroot/sesense-demo/ponder/apache-ant-1.7.0/lib/ant-launcher.jar" 
+-Dant.home="/fs/macdonald/selinks/sesense/webroot/sesense-demo/ponder/apache-ant-1.7.0" 
+-Dant.library.dir="/fs/macdonald/selinks/sesense/webroot/sesense-demo/ponder/apache-ant-1.7.0/lib" org.apache.tools.ant.launch.Launcher -cp ""
+
+piotrm
+exec "/usr/bin/java" -classpath 
+"/fs/macdonald/piotrm/sesense/webroot/sesense/ponder/apache-ant-1.7.0/lib/ant-launcher.jar" 
+-Dant.home="/fs/macdonald/piotrm/sesense/webroot/sesense/ponder/apache-ant-1.7.0" 
+-Dant.library.dir="/fs/macdonald/piotrm/sesense/webroot/sesense/ponder/apache-ant-1.7.0/lib" org.apache.tools.ant.launch.Launcher -cp ""
